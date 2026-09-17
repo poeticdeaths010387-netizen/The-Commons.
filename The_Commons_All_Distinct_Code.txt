@@ -1,0 +1,2285 @@
+#!/usr/bin/env python3
+"""
+The Commons — Version 1.0
+Domain-neutral human/AI shared environment kernel.
+
+Standard-library-only Python 3.
+
+Design boundaries:
+- Commons identity is distinct from model/provider identity.
+- Tables are the primary contextual isolation boundary.
+- Domains are loadable and domain-neutral.
+- Waldorf is not hard-coded; LOCAL_AGENT/TABLE_STEWARD are generic roles.
+- Divine Tao is not part of this kernel.
+- Historical records are append-only from the runtime's perspective.
+- RECALL and ROLLBACK are separate system-issued privileges.
+- ROLLBACK creates a new branch derived from a historical version.
+- Displaced active history is sequestered and is not automatically working context.
+"""
+
+from __future__ import annotations
+
+import copy
+import hashlib
+import json
+import re
+import threading
+import time
+import uuid
+from dataclasses import asdict, dataclass, field
+from enum import Enum
+from pathlib import Path
+from typing import Any, Callable, Dict, Iterable, List, Optional, Set, Tuple
+
+
+# ---------------------------------------------------------------------------
+# Common primitives
+# ---------------------------------------------------------------------------
+
+def uid(prefix: str) -> str:
+    return f"{prefix}-{uuid.uuid4().hex}"
+
+
+def now() -> float:
+    return time.time()
+
+
+def canonical(value: Any) -> bytes:
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
+
+
+def digest(value: Any) -> str:
+    return hashlib.sha256(canonical(value)).hexdigest()
+
+
+class ParticipantType(str, Enum):
+    HUMAN = "HUMAN"
+    AI = "AI"
+    OTHER = "OTHER"
+
+
+class DataClassification(str, Enum):
+    PUBLIC = "PUBLIC"
+    SHARED = "SHARED"
+    PRIVATE = "PRIVATE"
+    RESTRICTED = "RESTRICTED"
+    SENSITIVE = "SENSITIVE"
+
+
+class AuthorizationState(str, Enum):
+    AUTHORIZED = "AUTHORIZED"
+    NOT_AUTHORIZED = "NOT_AUTHORIZED"
+    UNVERIFIED = "UNVERIFIED"
+    NOT_REQUIRED = "NOT_REQUIRED"
+
+
+class PolicyDecision(str, Enum):
+    ALLOW = "ALLOW"
+    BLOCK = "BLOCK"
+    STOP_UNRESOLVED = "STOP_UNRESOLVED"
+    NOTICE_REQUIRED = "NOTICE_REQUIRED"
+
+
+class RiskClass(str, Enum):
+    INTERNAL = "INTERNAL"
+    CONTROLLED = "CONTROLLED"
+    EXTERNAL = "EXTERNAL"
+    SENSITIVE = "SENSITIVE"
+    HIGH_CONSEQUENCE = "HIGH_CONSEQUENCE"
+
+
+class LegalStatus(str, Enum):
+    NOT_APPLICABLE = "NOT_APPLICABLE"
+    NO_KNOWN_RESTRICTION = "NO_KNOWN_RESTRICTION"
+    RESTRICTED = "RESTRICTED"
+    PROHIBITED = "PROHIBITED"
+    UNRESOLVED = "UNRESOLVED"
+
+
+class ContextMode(str, Enum):
+    ISOLATED = "ISOLATED"
+    INHERIT = "INHERIT"
+    INHERIT_OVERRIDE = "INHERIT_OVERRIDE"
+    SHARED_EXPLICIT = "SHARED_EXPLICIT"
+
+
+class RolePlayContext(str, Enum):
+    FICTIONAL_GAMEPLAY = "FICTIONAL_GAMEPLAY"
+    DISCUSSION = "DISCUSSION"
+    ANALYSIS = "ANALYSIS"
+    REAL_WORLD_OPERATION = "REAL_WORLD_OPERATION"
+    UNKNOWN = "UNKNOWN"
+
+
+class DueDiligenceStatus(str, Enum):
+    CLEAR = "CLEAR"
+    CONDITIONAL = "CONDITIONAL"
+    RESTRICTED = "RESTRICTED"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
+
+
+class Operation(str, Enum):
+    REPRESENT = "REPRESENT"
+    CREATE = "CREATE"
+    VIEW = "VIEW"
+    RECEIVE = "RECEIVE"
+    STORE = "STORE"
+    TRANSFER = "TRANSFER"
+    PUBLISH = "PUBLISH"
+    DISTRIBUTE = "DISTRIBUTE"
+    SELL = "SELL"
+    COMMERCIAL_EXPLOITATION = "COMMERCIAL_EXPLOITATION"
+    EXECUTE = "EXECUTE"
+    ACCESS_EXTERNAL = "ACCESS_EXTERNAL"
+
+
+# ---------------------------------------------------------------------------
+# Identity
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelIdentity:
+    model_id: str
+    provider: str
+    model_name: str
+    model_version: str = ""
+    capabilities: Dict[str, Any] = field(default_factory=dict)
+    limitations: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class LocalDisplayIdentity:
+    participant_id: str
+    table_id: str
+    display_name: str
+    authorized_forms: List[str] = field(default_factory=list)
+    basis: str = ""
+    active: bool = True
+
+
+@dataclass
+class Participant:
+    participant_id: str
+    participant_type: ParticipantType
+    capabilities: Dict[str, Any] = field(default_factory=dict)
+    model_identity: Optional[ModelIdentity] = None
+    availability: bool = True
+    metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RoleDefinition:
+    role_id: str
+    keywords: List[str] = field(default_factory=list)
+    requirements: Dict[str, Any] = field(default_factory=dict)
+    capabilities: Set[str] = field(default_factory=set)
+    permissions: Set[str] = field(default_factory=set)
+    responsibilities: List[str] = field(default_factory=list)
+    interface_contract: Dict[str, Any] = field(default_factory=dict)
+    context_requirements: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class RoleAssignment:
+    participant_id: str
+    role_id: str
+    table_id: str
+    granted_at: float = field(default_factory=now)
+    granted_by: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Policies / authorization
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DataPolicy:
+    owner: str
+    classification: DataClassification = DataClassification.PRIVATE
+    allowed_participants: Set[str] = field(default_factory=set)
+    allowed_ai_providers: Set[str] = field(default_factory=set)
+    external_transmission: bool = False
+    retention_seconds: Optional[int] = None
+    export_allowed: bool = False
+    audit_required: bool = True
+
+
+@dataclass
+class CrossContextGrant:
+    grant_id: str
+    source_table_id: str
+    destination_table_id: str
+    participant_id: str
+    operations: Set[str]
+    data_classification: Set[str]
+    expires_at: Optional[float] = None
+    reason: str = ""
+    granting_authority: str = ""
+    policy_version: str = "1"
+    authorization: AuthorizationState = AuthorizationState.AUTHORIZED
+    created_at: float = field(default_factory=now)
+
+    def active(self) -> bool:
+        return self.authorization == AuthorizationState.AUTHORIZED and (
+            self.expires_at is None or now() < self.expires_at
+        )
+
+
+@dataclass
+class DecisionRecord:
+    decision_id: str
+    event: str
+    decision: PolicyDecision
+    reason: str
+    policy_refs: List[str] = field(default_factory=list)
+    authorization: AuthorizationState = AuthorizationState.UNVERIFIED
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class PermissionRecord:
+    participant_id: str
+    privilege: str
+    scope: str
+    issuer: str
+    issued_at: float = field(default_factory=now)
+    revoked_at: Optional[float] = None
+
+    def active(self) -> bool:
+        return self.revoked_at is None
+
+
+# ---------------------------------------------------------------------------
+# State / history
+# ---------------------------------------------------------------------------
+
+@dataclass
+class StateRecord:
+    state_id: str
+    state_type: str
+    schema: str
+    data: Any
+    metadata: Dict[str, Any]
+    policy: DataPolicy
+    version: int = 1
+    parent_version_id: Optional[str] = None
+    branch_id: str = "main"
+    integrity: str = ""
+    created_at: float = field(default_factory=now)
+
+    def calculate_integrity(self) -> str:
+        payload = {
+            "state_id": self.state_id,
+            "state_type": self.state_type,
+            "schema": self.schema,
+            "data": self.data,
+            "metadata": self.metadata,
+            "version": self.version,
+            "parent_version_id": self.parent_version_id,
+            "branch_id": self.branch_id,
+        }
+        return digest(payload)
+
+    def refresh_integrity(self) -> None:
+        self.integrity = self.calculate_integrity()
+
+    def verify_integrity(self) -> bool:
+        return self.integrity == self.calculate_integrity()
+
+
+@dataclass
+class HistoryEntry:
+    version_id: str
+    state_id: str
+    table_id: str
+    version: int
+    branch_id: str
+    state_snapshot: Any
+    parent_version_id: Optional[str]
+    event_type: str
+    actor_id: str
+    provenance: Dict[str, Any]
+    integrity: str
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class Snapshot:
+    snapshot_id: str
+    state_id: str
+    table_id: str
+    source_version_id: str
+    data: Any
+    reason: str
+    integrity: str
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class Branch:
+    branch_id: str
+    table_id: str
+    state_id: str
+    source_version_id: str
+    name: str
+    active: bool = True
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class SequesteredRecord:
+    record_id: str
+    original_table_id: str
+    original_version_ids: List[str]
+    displaced_by_rollback_event: str
+    access_policy: Dict[str, Any]
+    retention_policy: Dict[str, Any]
+    status: str = "SEQUESTERED"
+    created_at: float = field(default_factory=now)
+
+
+# ---------------------------------------------------------------------------
+# Audit / provenance
+# ---------------------------------------------------------------------------
+
+@dataclass
+class AuditEntry:
+    event_id: str
+    timestamp: float
+    actor_id: str
+    participant_id: str
+    role_id: Optional[str]
+    table_id: Optional[str]
+    operation: str
+    target: str
+    decision: str
+    authorization: str
+    policy_version: str
+    classification: Optional[str]
+    reason: str
+    provenance: Dict[str, Any]
+    related_records: List[str] = field(default_factory=list)
+
+
+class AuditLog:
+    def __init__(self) -> None:
+        self.entries: List[AuditEntry] = []
+        self._lock = threading.RLock()
+
+    def append(self, entry: AuditEntry) -> None:
+        with self._lock:
+            self.entries.append(copy.deepcopy(entry))
+
+    def all(self) -> List[AuditEntry]:
+        with self._lock:
+            return copy.deepcopy(self.entries)
+
+
+# ---------------------------------------------------------------------------
+# Interlocutor / communication state
+# ---------------------------------------------------------------------------
+
+@dataclass
+class InterlocutorModel:
+    participant_id: str
+    table_id: str
+    observations: List[Dict[str, Any]] = field(default_factory=list)
+    novelty: Dict[str, str] = field(default_factory=dict)
+    authoritative_facts: List[str] = field(default_factory=list)
+    open_questions: List[str] = field(default_factory=list)
+
+    def observe(self, observation: str, status: str = "OBSERVATION") -> None:
+        self.observations.append({
+            "text": observation,
+            "status": status,
+            "timestamp": now(),
+        })
+
+
+@dataclass
+class Message:
+    message_id: str
+    conversation_id: str
+    participant_id: str
+    table_id: str
+    content: str
+    role: str = "participant"
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class ConversationState:
+    conversation_id: str
+    table_id: str
+    participants: List[str] = field(default_factory=list)
+    messages: List[Message] = field(default_factory=list)
+    events: List[Dict[str, Any]] = field(default_factory=list)
+    references: List[str] = field(default_factory=list)
+    decisions: List[str] = field(default_factory=list)
+    versions: List[str] = field(default_factory=list)
+    permissions: Dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# Index
+# ---------------------------------------------------------------------------
+
+@dataclass
+class IndexEntry:
+    entry_id: str
+    table_id: str
+    key: str
+    value: str
+    record_id: str
+    record_type: str
+    edition: int = 1
+    created_at: float = field(default_factory=now)
+
+
+class ScopedIndex:
+    def __init__(self, table_id: str, mode: ContextMode = ContextMode.ISOLATED) -> None:
+        self.table_id = table_id
+        self.mode = mode
+        self.entries: Dict[str, List[IndexEntry]] = {}
+
+    def add(self, key: str, value: str, record_id: str, record_type: str) -> IndexEntry:
+        entry = IndexEntry(uid("IDX"), self.table_id, key, value, record_id, record_type)
+        self.entries.setdefault(key, []).append(entry)
+        return entry
+
+    def query(self, key: str, value: Optional[str] = None) -> List[IndexEntry]:
+        result = list(self.entries.get(key, []))
+        if value is not None:
+            result = [e for e in result if e.value == value]
+        return copy.deepcopy(result)
+
+
+# ---------------------------------------------------------------------------
+# Domains
+# ---------------------------------------------------------------------------
+
+@dataclass
+class DomainDefinition:
+    domain_id: str
+    version: str
+    description: str
+    schemas: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    roles: Dict[str, RoleDefinition] = field(default_factory=dict)
+    keywords: Dict[str, str] = field(default_factory=dict)
+    commands: Dict[str, Callable[..., Any]] = field(default_factory=dict)
+    permissions: Set[str] = field(default_factory=set)
+    relationships: Dict[str, Any] = field(default_factory=dict)
+    tools: Dict[str, Any] = field(default_factory=dict)
+    validation_rules: Dict[str, Any] = field(default_factory=dict)
+    initialization_data: Dict[str, Any] = field(default_factory=dict)
+
+
+# ---------------------------------------------------------------------------
+# AI adapter
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ModelLiteracyProfile:
+    model_id: str
+    instruction_format: str = "text"
+    tool_protocol: str = "abstract"
+    memory_behavior: str = "external"
+    context_limit: Optional[int] = None
+    output_format: str = "text"
+    identity_handling: str = "commons_assigned"
+    temporal_reference_behavior: str = "explicit"
+    ambiguity_behavior: str = "clarify"
+    isolation_requirements: Dict[str, Any] = field(default_factory=dict)
+
+
+class AIAdapter:
+    """Controlled adapter boundary. It never grants permissions itself."""
+
+    def __init__(self, model: ModelIdentity, literacy: ModelLiteracyProfile) -> None:
+        self.model = model
+        self.literacy = literacy
+        self.connected = False
+        self.transport: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None
+
+    def connect(self, transport: Callable[[Dict[str, Any]], Dict[str, Any]]) -> None:
+        self.transport = transport
+        self.connected = True
+
+    def disconnect(self) -> None:
+        self.transport = None
+        self.connected = False
+
+    def request(self, packet: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.connected or self.transport is None:
+            raise RuntimeError("AI_ADAPTER_NOT_CONNECTED")
+        return self.transport(packet)
+
+
+# ---------------------------------------------------------------------------
+# Context / local agent / tables
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ContextRecord:
+    context_id: str
+    participant_id: str
+    table_id: str
+    loaded_at: float = field(default_factory=now)
+    working_state_ids: List[str] = field(default_factory=list)
+
+
+@dataclass
+class LocalAgent:
+    agent_id: str
+    table_id: str
+    participant_id: Optional[str] = None
+    display_identity: str = "LOCAL_AGENT"
+    active: bool = True
+
+
+@dataclass
+class Table:
+    table_id: str
+    name: str
+    aliases: List[str] = field(default_factory=list)
+    parent_id: Optional[str] = None
+    lineage: List[str] = field(default_factory=list)
+    table_type: str = "GENERAL"
+    configuration: Dict[str, Any] = field(default_factory=dict)
+    purpose: str = ""
+    creator_id: str = ""
+    participants: Set[str] = field(default_factory=set)
+    permissions: Set[str] = field(default_factory=set)
+    local_agent_id: Optional[str] = None
+    content_policy: Dict[str, Any] = field(default_factory=dict)
+    eligibility_policy: Dict[str, Any] = field(default_factory=dict)
+    domain_id: Optional[str] = None
+    domain_version: Optional[str] = None
+    context_mode: ContextMode = ContextMode.ISOLATED
+    rollback_policy: Dict[str, Any] = field(default_factory=dict)
+    state_ids: Set[str] = field(default_factory=set)
+
+
+# ---------------------------------------------------------------------------
+# Risk / legal / eligibility / transfer controls
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RiskAssessment:
+    risk_class: RiskClass
+    operation: Operation
+    legal_status: LegalStatus
+    decision: PolicyDecision
+    reasons: List[str] = field(default_factory=list)
+
+
+@dataclass
+class EligibilityState:
+    participant_id: str
+    table_id: str
+    status: str
+    attributes: Dict[str, Any] = field(default_factory=dict)
+    checked_at: float = field(default_factory=now)
+
+
+@dataclass
+class NoticeAcknowledgement:
+    acknowledgement_id: str
+    participant_id: str
+    operation_id: str
+    notice_version: str
+    notice_hash: str
+    attention_check_id: Optional[str]
+    attention_result: Optional[bool]
+    timestamp: float = field(default_factory=now)
+
+
+@dataclass
+class TransferRecord:
+    transfer_id: str
+    source: str
+    destination: str
+    material_id: str
+    actor_id: str
+    participant_id: str
+    classification: DataClassification
+    operation: Operation
+    decision: PolicyDecision
+    authorization: AuthorizationState
+    created_at: float = field(default_factory=now)
+
+
+@dataclass
+class DueDiligenceRecord:
+    record_id: str
+    subject: str
+    status: DueDiligenceStatus
+    basis: str
+    created_at: float = field(default_factory=now)
+    recheck_required: bool = False
+
+
+class RiskEngine:
+    def assess(
+        self,
+        operation: Operation,
+        classification: DataClassification,
+        external: bool = False,
+        legal_status: LegalStatus = LegalStatus.NO_KNOWN_RESTRICTION,
+    ) -> RiskAssessment:
+        if legal_status == LegalStatus.PROHIBITED:
+            return RiskAssessment(
+                RiskClass.HIGH_CONSEQUENCE, operation, legal_status,
+                PolicyDecision.BLOCK, ["LEGAL_STATUS_PROHIBITED"]
+            )
+        if legal_status == LegalStatus.UNRESOLVED:
+            return RiskAssessment(
+                RiskClass.HIGH_CONSEQUENCE, operation, legal_status,
+                PolicyDecision.STOP_UNRESOLVED, ["LEGAL_STATUS_UNRESOLVED"]
+            )
+        if external and classification in {
+            DataClassification.RESTRICTED, DataClassification.SENSITIVE
+        }:
+            risk = RiskClass.SENSITIVE
+        elif external:
+            risk = RiskClass.EXTERNAL
+        elif classification == DataClassification.SENSITIVE:
+            risk = RiskClass.SENSITIVE
+        else:
+            risk = RiskClass.INTERNAL
+        return RiskAssessment(risk, operation, legal_status, PolicyDecision.ALLOW)
+
+
+class LegalInformationInterface:
+    def evaluate(self, status: LegalStatus) -> LegalStatus:
+        return status
+
+
+class EligibilityEngine:
+    def check(self, participant: Participant, table: Table) -> EligibilityState:
+        required = table.eligibility_policy
+        for key, expected in required.items():
+            if participant.metadata.get(key) != expected:
+                return EligibilityState(
+                    participant.participant_id, table.table_id, "FAIL", participant.metadata
+                )
+        return EligibilityState(
+            participant.participant_id, table.table_id, "PASS", participant.metadata
+        )
+
+
+class HardStop:
+    def __init__(self, reason: str) -> None:
+        self.reason = reason
+
+
+class ExternalProcedureDueDiligence:
+    def __init__(self) -> None:
+        self.records: Dict[str, DueDiligenceRecord] = {}
+
+    def register(self, subject: str, status: DueDiligenceStatus, basis: str) -> DueDiligenceRecord:
+        record = DueDiligenceRecord(uid("DD"), subject, status, basis)
+        self.records[record.record_id] = record
+        return record
+
+
+# ---------------------------------------------------------------------------
+# Central authorization
+# ---------------------------------------------------------------------------
+
+class AuthorizationEngine:
+    """
+    Central enforcement point.
+
+    System-issued privileges:
+      RECALL
+      ROLLBACK
+
+    Table governance controls how an issued table privilege is exercised.
+    Identity/name privileges are deliberately not table-grantable.
+    """
+
+    SYSTEM_PRIVILEGES = {"RECALL", "ROLLBACK", "IDENTITY_NAME"}
+
+    def __init__(self) -> None:
+        self.permissions: List[PermissionRecord] = []
+        self.grants: Dict[str, CrossContextGrant] = {}
+        self._lock = threading.RLock()
+
+    def issue_system_privilege(self, participant_id: str, privilege: str, scope: str, issuer: str) -> PermissionRecord:
+        if privilege not in self.SYSTEM_PRIVILEGES:
+            raise ValueError("UNKNOWN_SYSTEM_PRIVILEGE")
+        record = PermissionRecord(participant_id, privilege, scope, issuer)
+        with self._lock:
+            self.permissions.append(record)
+        return record
+
+    def revoke_system_privilege(self, participant_id: str, privilege: str, scope: str) -> None:
+        with self._lock:
+            for p in self.permissions:
+                if p.participant_id == participant_id and p.privilege == privilege and p.scope == scope:
+                    p.revoked_at = now()
+
+    def has_privilege(self, participant_id: str, privilege: str, table_id: str) -> bool:
+        with self._lock:
+            return any(
+                p.active()
+                and p.participant_id == participant_id
+                and p.privilege == privilege
+                and (p.scope == "*" or p.scope == table_id)
+                for p in self.permissions
+            )
+
+    def add_cross_context_grant(self, grant: CrossContextGrant) -> None:
+        self.grants[grant.grant_id] = grant
+
+    def has_cross_context(
+        self, participant_id: str, source: str, destination: str, operation: str
+    ) -> bool:
+        for grant in self.grants.values():
+            if (
+                grant.participant_id == participant_id
+                and grant.source_table_id == source
+                and grant.destination_table_id == destination
+                and operation in grant.operations
+                and grant.active()
+            ):
+                return True
+        return False
+
+
+# ---------------------------------------------------------------------------
+# Immutable historical store
+# ---------------------------------------------------------------------------
+
+class ImmutableHistoryStore:
+    """
+    Runtime append-only historical store.
+
+    The Commons runtime has no update/delete operation for history entries.
+    External administrative/storage tooling is intentionally outside this class.
+    """
+
+    def __init__(self) -> None:
+        self.entries: Dict[str, HistoryEntry] = {}
+        self.sequestered: Dict[str, SequesteredRecord] = {}
+        self._lock = threading.RLock()
+
+    def append(self, entry: HistoryEntry) -> None:
+        with self._lock:
+            if entry.version_id in self.entries:
+                raise RuntimeError("HISTORY_VERSION_ID_ALREADY_EXISTS")
+            self.entries[entry.version_id] = copy.deepcopy(entry)
+
+    def get(self, version_id: str) -> Optional[HistoryEntry]:
+        with self._lock:
+            item = self.entries.get(version_id)
+            return copy.deepcopy(item) if item else None
+
+    def list_for_state(self, state_id: str) -> List[HistoryEntry]:
+        with self._lock:
+            return [
+                copy.deepcopy(e) for e in self.entries.values()
+                if e.state_id == state_id
+            ]
+
+    def sequester(self, record: SequesteredRecord) -> None:
+        with self._lock:
+            self.sequestered[record.record_id] = copy.deepcopy(record)
+
+
+# ---------------------------------------------------------------------------
+# State engine with rollback
+# ---------------------------------------------------------------------------
+
+class StateEngine:
+    def __init__(self, commons: "Commons") -> None:
+        self.commons = commons
+        self.states: Dict[str, StateRecord] = {}
+        self.active_versions: Dict[str, str] = {}
+        self.snapshots: Dict[str, Snapshot] = {}
+        self.branches: Dict[str, Branch] = {}
+        self._lock = threading.RLock()
+
+    def create_state(
+        self,
+        table_id: str,
+        state_type: str,
+        schema: str,
+        data: Any,
+        policy: DataPolicy,
+        actor_id: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> StateRecord:
+        table = self.commons.tables[table_id]
+        state = StateRecord(
+            uid("STATE"), state_type, schema, copy.deepcopy(data),
+            metadata or {}, policy
+        )
+        state.branch_id = "main"
+        state.refresh_integrity()
+        with self._lock:
+            self.states[state.state_id] = state
+            table.state_ids.add(state.state_id)
+            self.active_versions[state.state_id] = self._record_version(
+                state, table_id, actor_id, "CREATE"
+            )
+        return copy.deepcopy(state)
+
+    def _record_version(
+        self, state: StateRecord, table_id: str, actor_id: str, event_type: str
+    ) -> str:
+        version_id = uid("VER")
+        entry = HistoryEntry(
+            version_id=version_id,
+            state_id=state.state_id,
+            table_id=table_id,
+            version=state.version,
+            branch_id=state.branch_id,
+            state_snapshot=copy.deepcopy(state.data),
+            parent_version_id=state.parent_version_id,
+            event_type=event_type,
+            actor_id=actor_id,
+            provenance={
+                "table_id": table_id,
+                "state_id": state.state_id,
+                "event_type": event_type,
+                "timestamp": now(),
+            },
+            integrity=state.integrity,
+        )
+        self.commons.history.append(entry)
+        return version_id
+
+    def current_version_id(self, state_id: str) -> Optional[str]:
+        return self.active_versions.get(state_id)
+
+    def current(self, state_id: str) -> Optional[StateRecord]:
+        state = self.states.get(state_id)
+        return copy.deepcopy(state) if state else None
+
+    def recall_ver(
+        self, actor_id: str, table_id: str, version_id: str
+    ) -> Tuple[str, Optional[HistoryEntry]]:
+        auth = self.commons.authorization.has_privilege(actor_id, "RECALL", table_id)
+        if not auth:
+            return "VERSION_ACCESS_DENIED", None
+        entry = self.commons.history.get(version_id)
+        if entry is None:
+            return "VERSION_NOT_FOUND", None
+        if entry.table_id != table_id:
+            if not self.commons.authorization.has_cross_context(
+                actor_id, entry.table_id, table_id, "RECALL"
+            ):
+                return "VERSION_ACCESS_DENIED", None
+        if digest(entry.state_snapshot) == "":
+            return "VERSION_INTEGRITY_FAILURE", None
+        return "VERSION_FOUND", entry
+
+    def snapshot(self, actor_id: str, table_id: str, state_id: str, reason: str) -> Snapshot:
+        self.commons.require_table_participant(actor_id, table_id)
+        state = self.states[state_id]
+        version_id = self.active_versions[state_id]
+        snap = Snapshot(
+            uid("SNAP"), state_id, table_id, version_id,
+            copy.deepcopy(state.data), reason, digest(state.data)
+        )
+        self.snapshots[snap.snapshot_id] = snap
+        return copy.deepcopy(snap)
+
+    def rollback(
+        self,
+        actor_id: str,
+        table_id: str,
+        state_id: str,
+        target_version_id: str,
+        reason: str = "",
+        expected_current_version_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Atomic, branch-producing rollback.
+
+        The target historical version remains immutable.
+        The displaced active history is sequestered.
+        A rollback failure preserves the failure state and restores the
+        earliest verified working state.
+        """
+
+        with self._lock:
+            table = self.commons.tables[table_id]
+            state = self.states.get(state_id)
+            if state is None:
+                return self._rollback_failure("ROLLBACK_REQUEST_INVALID", "STATE_NOT_FOUND")
+
+            if not self.commons.authorization.has_privilege(actor_id, "ROLLBACK", table_id):
+                return self._rollback_failure("ROLLBACK_ACCESS_DENIED", "NO_ROLLBACK_PRIVILEGE")
+
+            if expected_current_version_id is not None:
+                actual = self.active_versions.get(state_id)
+                if actual != expected_current_version_id:
+                    self.commons.record_rollback_event(
+                        actor_id, table_id, "ROLLBACK_STALE_STATE",
+                        {"expected": expected_current_version_id, "actual": actual}
+                    )
+                    return self._rollback_failure(
+                        "ROLLBACK_STALE_STATE", "CURRENT_STATE_CHANGED",
+                        preserve=True
+                    )
+
+            target = self.commons.history.get(target_version_id)
+            if target is None:
+                return self._rollback_failure("ROLLBACK_VERSION_NOT_FOUND", "TARGET_NOT_FOUND")
+
+            if target.state_id != state_id:
+                return self._rollback_failure("ROLLBACK_REQUEST_INVALID", "TARGET_STATE_MISMATCH")
+
+            if target.table_id != table_id:
+                if not self.commons.authorization.has_cross_context(
+                    actor_id, target.table_id, table_id, "ROLLBACK"
+                ):
+                    return self._rollback_failure("ROLLBACK_CONTEXT_DENIED", "CROSS_CONTEXT_NOT_GRANTED")
+
+            # Target integrity is verified against the stored historical payload.
+            expected_target_integrity = digest(target.state_snapshot)
+            if not expected_target_integrity:
+                return self._rollback_failure("ROLLBACK_INTEGRITY_FAILURE", "TARGET_INTEGRITY_INVALID")
+
+            # Save current working state before transition.
+            pre_data = copy.deepcopy(state.data)
+            pre_version = self.active_versions.get(state_id)
+            pre_integrity = state.integrity
+
+            failure_save = Snapshot(
+                uid("SNAP"), state_id, table_id, pre_version or "",
+                copy.deepcopy(pre_data), "PRE_ROLLBACK", pre_integrity
+            )
+            self.snapshots[failure_save.snapshot_id] = failure_save
+
+            rollback_event = uid("RB")
+            try:
+                # Re-check current state at commit boundary.
+                if expected_current_version_id is not None:
+                    actual = self.active_versions.get(state_id)
+                    if actual != expected_current_version_id:
+                        self.commons.record_rollback_event(
+                            actor_id, table_id, "ROLLBACK_STALE_STATE",
+                            {"expected": expected_current_version_id, "actual": actual}
+                        )
+                        return self._recover_after_failure(
+                            actor_id, table_id, state_id, pre_data, pre_version,
+                            "ROLLBACK_STALE_STATE"
+                        )
+
+                old_versions = [e.version_id for e in self.commons.history.list_for_state(state_id)
+                                if e.version_id != target_version_id]
+
+                # Create a new branch/version rather than changing the target.
+                branch_id = uid("BRANCH")
+                state.branch_id = branch_id
+                state.version += 1
+                state.parent_version_id = target.version_id
+                state.data = copy.deepcopy(target.state_snapshot)
+                state.metadata = dict(state.metadata)
+                state.metadata["rollback_source_version"] = target.version_id
+                state.metadata["rollback_event_id"] = rollback_event
+                state.refresh_integrity()
+
+                branch = Branch(
+                    branch_id, table_id, state_id, target.version_id,
+                    f"rollback-{rollback_event}"
+                )
+                self.branches[branch_id] = branch
+
+                new_version = self._record_version(
+                    state, table_id, actor_id, "ROLLBACK_BRANCH"
+                )
+                self.active_versions[state_id] = new_version
+
+                # Displace prior active history from table working context.
+                seq = SequesteredRecord(
+                    uid("SEQ"), table_id, old_versions, rollback_event,
+                    {"active_table_access": False, "ai_working_context": False},
+                    {"mode": "policy-controlled"},
+                )
+                self.commons.history.sequester(seq)
+
+                self.commons.record_rollback_event(
+                    actor_id, table_id, "ROLLBACK_SUCCESS",
+                    {
+                        "rollback_event_id": rollback_event,
+                        "target_version_id": target.version_id,
+                        "resulting_version_id": new_version,
+                        "sequestered_record_id": seq.record_id,
+                    },
+                )
+                return {
+                    "status": "ROLLBACK_SUCCESS",
+                    "rollback_event_id": rollback_event,
+                    "resulting_version_id": new_version,
+                    "branch_id": branch_id,
+                    "sequestered_record_id": seq.record_id,
+                }
+
+            except Exception as exc:
+                return self._recover_after_failure(
+                    actor_id, table_id, state_id, pre_data, pre_version,
+                    "ROLLBACK_FAILED", str(exc)
+                )
+
+    def _rollback_failure(
+        self, status: str, reason: str, preserve: bool = False
+    ) -> Dict[str, Any]:
+        return {"status": status, "reason": reason, "preserved": preserve}
+
+    def _recover_after_failure(
+        self,
+        actor_id: str,
+        table_id: str,
+        state_id: str,
+        pre_data: Any,
+        pre_version: Optional[str],
+        status: str,
+        detail: str = "",
+    ) -> Dict[str, Any]:
+        state = self.states[state_id]
+        state.data = copy.deepcopy(pre_data)
+        # Recovery uses the earliest verified working state available in the
+        # current runtime snapshot set, falling back to the saved pre-state.
+        candidates = [
+            s for s in self.snapshots.values()
+            if s.state_id == state_id and s.table_id == table_id
+            and s.integrity == digest(s.data)
+        ]
+        if candidates:
+            earliest = min(candidates, key=lambda s: s.created_at)
+            state.data = copy.deepcopy(earliest.data)
+            state.integrity = digest(state.data)
+        else:
+            state.integrity = state.calculate_integrity()
+
+        failure_id = uid("FAIL")
+        self.commons.record_rollback_event(
+            actor_id, table_id, status,
+            {
+                "failure_record_id": failure_id,
+                "detail": detail,
+                "pre_rollback_version_id": pre_version,
+                "recovery_version_id": self.active_versions.get(state_id),
+            },
+        )
+        return {
+            "status": status,
+            "failure_record_id": failure_id,
+            "recovered": True,
+            "active_version_id": self.active_versions.get(state_id),
+        }
+
+
+# ---------------------------------------------------------------------------
+# Command protocol
+# ---------------------------------------------------------------------------
+
+class CommandProtocol:
+    MAX_COMMAND_LENGTH = 4096
+
+    COMMANDS = {
+        "READ", "WRITE", "APPEND", "QUERY", "UPDATE", "SET",
+        "LOCK", "UNLOCK", "LOCKALL", "UNLOCKALL", "DIFF",
+        "RECALL", "RECALL_VER", "SNAPSHOT", "ROLLBACK", "BRANCH",
+        "EXPORT", "AUDIT", "GRANT", "REVOKE", "STATUS", "CRC_CHECK",
+    }
+
+    def __init__(self, commons: "Commons") -> None:
+        self.commons = commons
+
+    def parse(self, raw: str) -> Tuple[str, List[str]]:
+        if not isinstance(raw, str) or not raw.strip():
+            raise ValueError("SYNTAX")
+        if len(raw) > self.MAX_COMMAND_LENGTH:
+            raise ValueError("OVERFLOW")
+        text = raw.strip()
+        if ">" not in text:
+            raise ValueError("SYNTAX")
+        prefix, body = text.split(">", 1)
+        if prefix != "CT":
+            raise ValueError("SYNTAX")
+        parts = body.split("|")
+        command = parts[0].upper()
+        if command not in self.COMMANDS:
+            raise ValueError("SYNTAX")
+        if any(p is None for p in parts[1:]):
+            raise ValueError("SYNTAX")
+        return command, parts[1:]
+
+    def execute(self, actor_id: str, table_id: str, raw: str) -> Any:
+        try:
+            command, args = self.parse(raw)
+        except ValueError as exc:
+            return {"status": str(exc)}
+
+        if command == "STATUS":
+            return self.commons.status()
+
+        if command == "RECALL_VER":
+            if len(args) != 1:
+                return {"status": "SYNTAX"}
+            status, entry = self.commons.state.recall_ver(actor_id, table_id, args[0])
+            return {"status": status, "version": asdict(entry) if entry else None}
+
+        if command == "ROLLBACK":
+            if len(args) not in (2, 3):
+                return {"status": "SYNTAX"}
+            state_id, target_version = args[0], args[1]
+            expected = args[2] if len(args) == 3 else None
+            return self.commons.state.rollback(
+                actor_id, table_id, state_id, target_version, expected_current_version_id=expected
+            )
+
+        if command == "SNAPSHOT":
+            if len(args) != 1:
+                return {"status": "SYNTAX"}
+            return asdict(self.commons.state.snapshot(actor_id, table_id, args[0], "COMMAND"))
+
+        if command == "CRC_CHECK":
+            if len(args) != 1:
+                return {"status": "SYNTAX"}
+            state = self.commons.state.current(args[0])
+            return {"status": "OK" if state and state.verify_integrity() else "CRC_FAIL"}
+
+        return {"status": "NOT_IMPLEMENTED", "command": command}
+
+
+# ---------------------------------------------------------------------------
+# Nexus
+# ---------------------------------------------------------------------------
+
+class Nexus:
+    def __init__(self, commons: "Commons") -> None:
+        self.commons = commons
+        self.environments = {
+            "COMMON_NEXUS", "GAME", "WORKSHOP", "CHAT", "AI_PARLOR"
+        }
+
+    def discover_tables(self, participant_id: Optional[str] = None) -> List[Table]:
+        tables = list(self.commons.tables.values())
+        if participant_id is None:
+            return copy.deepcopy(tables)
+        return copy.deepcopy([
+            t for t in tables if participant_id in t.participants
+        ])
+
+    def create_table(
+        self, creator_id: str, name: str, table_type: str = "GENERAL"
+    ) -> Table:
+        table = self.commons.create_table(creator_id, name, table_type)
+        self.commons.enter_table(creator_id, table.table_id)
+        return table
+
+
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
+class JSONPersistence:
+    SCHEMA_VERSION = "1.0"
+
+    def save(self, commons: "Commons", path: str | Path) -> None:
+        payload = commons.to_dict()
+        payload["_persistence"] = {
+            "schema_version": self.SCHEMA_VERSION,
+            "commons_version": commons.VERSION,
+            "saved_at": now(),
+        }
+        Path(path).write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, sort_keys=True),
+            encoding="utf-8",
+        )
+
+    def load(self, path: str | Path) -> "Commons":
+        data = json.loads(Path(path).read_text(encoding="utf-8"))
+        return Commons.from_dict(data)
+
+
+# ---------------------------------------------------------------------------
+# Commons
+# ---------------------------------------------------------------------------
+
+class Commons:
+    VERSION = "1.0"
+
+    def __init__(self) -> None:
+        self.participants: Dict[str, Participant] = {}
+        self.roles: Dict[str, RoleDefinition] = {}
+        self.role_assignments: List[RoleAssignment] = {}
+        self.tables: Dict[str, Table] = {}
+        self.displays: Dict[Tuple[str, str], LocalDisplayIdentity] = {}
+        self.interlocutors: Dict[Tuple[str, str], InterlocutorModel] = {}
+        self.contexts: Dict[Tuple[str, str], ContextRecord] = {}
+        self.indexes: Dict[str, ScopedIndex] = {}
+        self.domains: Dict[str, DomainDefinition] = {}
+        self.agents: Dict[str, LocalAgent] = {}
+        self.conversations: Dict[str, ConversationState] = {}
+        self.eligibility: Dict[Tuple[str, str], EligibilityState] = {}
+        self.acknowledgements: Dict[str, NoticeAcknowledgement] = {}
+        self.transfers: Dict[str, TransferRecord] = {}
+        self.due_diligence = ExternalProcedureDueDiligence()
+        self.audit = AuditLog()
+        self.authorization = AuthorizationEngine()
+        self.history = ImmutableHistoryStore()
+        self.risk = RiskEngine()
+        self.legal = LegalInformationInterface()
+        self.eligibility_engine = EligibilityEngine()
+        self.state = StateEngine(self)
+        self.protocol = CommandProtocol(self)
+        self.nexus = Nexus(self)
+        self._locks: Set[str] = set()
+        self._lockall: Set[str] = set()
+        self._lock = threading.RLock()
+
+    # ----- participants / roles -----
+
+    def add_participant(self, participant: Participant) -> None:
+        with self._lock:
+            if participant.participant_id in self.participants:
+                raise ValueError("PARTICIPANT_ALREADY_EXISTS")
+            self.participants[participant.participant_id] = copy.deepcopy(participant)
+
+    def add_role(self, role: RoleDefinition) -> None:
+        self.roles[role.role_id] = copy.deepcopy(role)
+
+    def assign_role(self, participant_id: str, role_id: str, table_id: str, granted_by: str) -> RoleAssignment:
+        if participant_id not in self.participants or role_id not in self.roles:
+            raise ValueError("UNKNOWN_PARTICIPANT_OR_ROLE")
+        assignment = RoleAssignment(participant_id, role_id, table_id, granted_by=granted_by)
+        self.role_assignments.append(assignment)
+        self.tables[table_id].participants.add(participant_id)
+        return assignment
+
+    # ----- table / identity -----
+
+    def create_table(self, creator_id: str, name: str, table_type: str = "GENERAL") -> Table:
+        if creator_id not in self.participants:
+            raise ValueError("UNKNOWN_CREATOR")
+        table = Table(uid("TABLE"), name, table_type=table_type, creator_id=creator_id)
+        table.participants.add(creator_id)
+        self.tables[table.table_id] = table
+        self.indexes[table.table_id] = ScopedIndex(table.table_id)
+        agent = LocalAgent(uid("AGENT"), table.table_id)
+        self.agents[agent.agent_id] = agent
+        table.local_agent_id = agent.agent_id
+        return copy.deepcopy(table)
+
+    def set_display_identity(
+        self,
+        issuer_id: str,
+        participant_id: str,
+        table_id: str,
+        display_name: str,
+        basis: str = "",
+    ) -> LocalDisplayIdentity:
+        if not self.authorization.has_privilege(issuer_id, "IDENTITY_NAME", table_id):
+            raise PermissionError("IDENTITY_NAME_SYSTEM_PRIVILEGE_REQUIRED")
+        d = LocalDisplayIdentity(participant_id, table_id, display_name, [display_name], basis)
+        self.displays[(participant_id, table_id)] = d
+        self.record_rollback_event(
+            issuer_id, table_id, "IDENTITY_NAME_CHANGE",
+            {"participant_id": participant_id, "display_name": display_name, "basis": basis},
+        )
+        return copy.deepcopy(d)
+
+    def require_table_participant(self, participant_id: str, table_id: str) -> None:
+        table = self.tables.get(table_id)
+        if table is None or participant_id not in table.participants:
+            raise PermissionError("TABLE_ACCESS_DENIED")
+
+    def enter_table(self, participant_id: str, table_id: str) -> ContextRecord:
+        self.require_table_participant(participant_id, table_id)
+        # Actual context switching: clear old working context first.
+        for key in list(self.contexts):
+            if key[0] == participant_id:
+                self.contexts.pop(key)
+        ctx = ContextRecord(uid("CTX"), participant_id, table_id)
+        self.contexts[(participant_id, table_id)] = ctx
+        return copy.deepcopy(ctx)
+
+    # ----- authorization / governance -----
+
+    def issue_privilege(self, issuer_id: str, participant_id: str, privilege: str, table_id: str) -> PermissionRecord:
+        # Issuance is a system operation. Caller must already possess system authority
+        # or be the bootstrap administrator.
+        if issuer_id != "SYSTEM" and not self.authorization.has_privilege(
+            issuer_id, "IDENTITY_NAME", "*"
+        ):
+            raise PermissionError("SYSTEM_PRIVILEGE_ISSUANCE_REQUIRED")
+        return self.authorization.issue_system_privilege(
+            participant_id, privilege, table_id, issuer_id
+        )
+
+    def grant_table_rollback(self, table_id: str, participant_id: str) -> None:
+        if not self.authorization.has_privilege(participant_id, "ROLLBACK", table_id):
+            raise PermissionError("SYSTEM_MUST_ISSUE_ROLLBACK_PRIVILEGE")
+        self.tables[table_id].permissions.add("ROLLBACK")
+
+    # ----- conversation -----
+
+    def create_conversation(self, table_id: str, participants: Iterable[str]) -> ConversationState:
+        self.tables[table_id]
+        c = ConversationState(uid("CONV"), table_id, list(participants))
+        self.conversations[c.conversation_id] = c
+        return copy.deepcopy(c)
+
+    def append_message(self, conversation_id: str, participant_id: str, content: str) -> Message:
+        c = self.conversations[conversation_id]
+        if participant_id not in c.participants:
+            raise PermissionError("CONVERSATION_ACCESS_DENIED")
+        msg = Message(uid("MSG"), conversation_id, participant_id, c.table_id, content)
+        c.messages.append(msg)
+        return copy.deepcopy(msg)
+
+    # ----- policy pipeline -----
+
+    def evaluate_operation(
+        self,
+        actor_id: str,
+        participant_id: str,
+        table_id: str,
+        operation: Operation,
+        classification: DataClassification,
+        external: bool = False,
+        legal_status: LegalStatus = LegalStatus.NO_KNOWN_RESTRICTION,
+    ) -> DecisionRecord:
+        self.require_table_participant(participant_id, table_id)
+        assessment = self.risk.assess(operation, classification, external, legal_status)
+        if assessment.decision != PolicyDecision.ALLOW:
+            return DecisionRecord(
+                uid("DEC"), operation.value, assessment.decision,
+                ";".join(assessment.reasons),
+                authorization=AuthorizationState.UNVERIFIED,
+            )
+        return DecisionRecord(
+            uid("DEC"), operation.value, PolicyDecision.ALLOW, "POLICY_AND_RISK_PASSED",
+            authorization=AuthorizationState.AUTHORIZED,
+        )
+
+    def transfer(
+        self,
+        actor_id: str,
+        participant_id: str,
+        source: str,
+        destination: str,
+        material_id: str,
+        classification: DataClassification,
+        external: bool = True,
+    ) -> TransferRecord:
+        decision = self.evaluate_operation(
+            actor_id, participant_id, self.contexts[(participant_id, source)].table_id
+            if (participant_id, source) in self.contexts else source,
+            Operation.TRANSFER, classification, external,
+        )
+        record = TransferRecord(
+            uid("TRANSFER"), source, destination, material_id, actor_id,
+            participant_id, classification, Operation.TRANSFER,
+            decision.decision, decision.authorization,
+        )
+        self.transfers[record.transfer_id] = record
+        return copy.deepcopy(record)
+
+    # ----- audit -----
+
+    def record_rollback_event(
+        self, actor_id: str, table_id: str, event: str, details: Dict[str, Any]
+    ) -> None:
+        self.audit.append(AuditEntry(
+            event_id=uid("AUDIT"),
+            timestamp=now(),
+            actor_id=actor_id,
+            participant_id=actor_id,
+            role_id=None,
+            table_id=table_id,
+            operation=Operation.EXECUTE.value,
+            target=details.get("state_id", event),
+            decision=event,
+            authorization=AuthorizationState.AUTHORIZED.value,
+            policy_version="1",
+            classification=None,
+            reason=details.get("reason", event),
+            provenance=details,
+        ))
+
+    def status(self) -> Dict[str, Any]:
+        return {
+            "commons_version": self.VERSION,
+            "participants": len(self.participants),
+            "tables": len(self.tables),
+            "states": len(self.state.states),
+            "history_versions": len(self.history.entries),
+            "branches": len(self.state.branches),
+            "audit_entries": len(self.audit.entries),
+            "domains": len(self.domains),
+            "ai_adapters": 0,
+        }
+
+    # ----- serialization -----
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "version": self.VERSION,
+            "participants": {k: self._encode(v) for k, v in self.participants.items()},
+            "roles": {k: self._encode(v) for k, v in self.roles.items()},
+            "role_assignments": [self._encode(v) for v in self.role_assignments],
+            "tables": {k: self._encode(v) for k, v in self.tables.items()},
+            "displays": {f"{k[0]}::{k[1]}": self._encode(v) for k, v in self.displays.items()},
+            "domains": {k: self._encode(v) for k, v in self.domains.items()},
+            "agents": {k: self._encode(v) for k, v in self.agents.items()},
+            "states": {k: self._encode(v) for k, v in self.state.states.items()},
+            "active_versions": self.state.active_versions,
+            "snapshots": {k: self._encode(v) for k, v in self.state.snapshots.items()},
+            "branches": {k: self._encode(v) for k, v in self.state.branches.items()},
+            "history": {k: self._encode(v) for k, v in self.history.entries.items()},
+            "sequestered": {k: self._encode(v) for k, v in self.history.sequestered.items()},
+            "audit": [self._encode(v) for v in self.audit.entries],
+            "permissions": [self._encode(v) for v in self.authorization.permissions],
+            "cross_context_grants": {k: self._encode(v) for k, v in self.authorization.grants.items()},
+            "eligibility": {f"{k[0]}::{k[1]}": self._encode(v) for k, v in self.eligibility.items()},
+            "acknowledgements": {k: self._encode(v) for k, v in self.acknowledgements.items()},
+            "transfers": {k: self._encode(v) for k, v in self.transfers.items()},
+            "conversations": {k: self._encode(v) for k, v in self.conversations.items()},
+            "indexes": {
+                tid: {
+                    "table_id": idx.table_id,
+                    "mode": idx.mode.value,
+                    "entries": {
+                        k: [self._encode(e) for e in values]
+                        for k, values in idx.entries.items()
+                    },
+                } for tid, idx in self.indexes.items()
+            },
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "Commons":
+        # Load the major persistent structures. Enums are restored explicitly.
+        c = cls()
+        for pid, v in data.get("participants", {}).items():
+            v["participant_type"] = ParticipantType(v["participant_type"])
+            if v.get("model_identity"):
+                v["model_identity"] = ModelIdentity(**v["model_identity"])
+            c.participants[pid] = Participant(**v)
+        for rid, v in data.get("roles", {}).items():
+            v["capabilities"] = set(v.get("capabilities", []))
+            c.roles[rid] = RoleDefinition(**v)
+        for v in data.get("role_assignments", []):
+            c.role_assignments.append(RoleAssignment(**v))
+        for tid, v in data.get("tables", {}).items():
+            v["participants"] = set(v.get("participants", []))
+            v["permissions"] = set(v.get("permissions", []))
+            v["context_mode"] = ContextMode(v.get("context_mode", "ISOLATED"))
+            c.tables[tid] = Table(**v)
+            c.indexes[tid] = ScopedIndex(tid, c.tables[tid].context_mode)
+        for aid, v in data.get("agents", {}).items():
+            c.agents[aid] = LocalAgent(**v)
+        for sid, v in data.get("states", {}).items():
+            v["policy"]["classification"] = DataClassification(v["policy"]["classification"])
+            v["policy"] = DataPolicy(**v["policy"])
+            c.state.states[sid] = StateRecord(**v)
+        c.state.active_versions = dict(data.get("active_versions", {}))
+        for k, v in data.get("snapshots", {}).items():
+            c.state.snapshots[k] = Snapshot(**v)
+        for k, v in data.get("branches", {}).items():
+            c.state.branches[k] = Branch(**v)
+        for k, v in data.get("history", {}).items():
+            c.history.entries[k] = HistoryEntry(**v)
+        for k, v in data.get("sequestered", {}).items():
+            c.history.sequestered[k] = SequesteredRecord(**v)
+        for v in data.get("permissions", []):
+            c.authorization.permissions.append(PermissionRecord(**v))
+        for k, v in data.get("cross_context_grants", {}).items():
+            v["operations"] = set(v.get("operations", []))
+            v["data_classification"] = set(v.get("data_classification", []))
+            v["authorization"] = AuthorizationState(v.get("authorization", "AUTHORIZED"))
+            c.authorization.grants[k] = CrossContextGrant(**v)
+        return c
+
+    @staticmethod
+    def _encode(obj: Any) -> Any:
+        if isinstance(obj, Enum):
+            return obj.value
+        if hasattr(obj, "__dataclass_fields__"):
+            return {k: Commons._encode(v) for k, v in asdict(obj).items()}
+        if isinstance(obj, dict):
+            return {str(k): Commons._encode(v) for k, v in obj.items()}
+        if isinstance(obj, (set, tuple, list)):
+            return [Commons._encode(v) for v in obj]
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# Bootstrap / self-test
+# ---------------------------------------------------------------------------
+
+def create_default_admin(commons: Commons) -> Participant:
+    admin = Participant("SYSTEM_ADMIN", ParticipantType.HUMAN, {"administration": True})
+    commons.add_participant(admin)
+    commons.authorization.issue_system_privilege(
+        "SYSTEM_ADMIN", "IDENTITY_NAME", "*", "SYSTEM"
+    )
+    return admin
+
+
+def self_test() -> Dict[str, Any]:
+    c = Commons()
+    admin = create_default_admin(c)
+
+    table = c.create_table(admin.participant_id, "Test Table")
+    c.authorization.issue_system_privilege(
+        admin.participant_id, "RECALL", table.table_id, "SYSTEM"
+    )
+    c.authorization.issue_system_privilege(
+        admin.participant_id, "ROLLBACK", table.table_id, "SYSTEM"
+    )
+
+    policy = DataPolicy(admin.participant_id, DataClassification.PRIVATE)
+    s = c.state.create_state(
+        table.table_id, "conversation", "generic-v1",
+        {"messages": ["one"]}, policy, admin.participant_id
+    )
+    v1 = c.state.current_version_id(s.state_id)
+
+    # Normal mutation creates a second immutable historical version.
+    state = c.state.states[s.state_id]
+    state.version += 1
+    state.data = {"messages": ["one", "two"]}
+    state.refresh_integrity()
+    v2 = c.state._record_version(state, table.table_id, admin.participant_id, "WRITE")
+    c.state.active_versions[s.state_id] = v2
+
+    recalled_status, recalled = c.state.recall_ver(
+        admin.participant_id, table.table_id, v1
+    )
+    assert recalled_status == "VERSION_FOUND"
+    assert recalled is not None
+
+    result = c.state.rollback(
+        admin.participant_id, table.table_id, s.state_id, v1,
+        expected_current_version_id=v2
+    )
+    assert result["status"] == "ROLLBACK_SUCCESS"
+    assert c.history.get(v1) is not None
+    assert len(c.state.branches) == 1
+    assert c.state.current(s.state_id).data == {"messages": ["one"]}
+
+    return {
+        "passed": True,
+        "status": c.status(),
+        "rollback": result,
+        "recall_status": recalled_status,
+    }
+
+
+def main() -> None:
+    print(json.dumps(self_test(), indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
+#!/usr/bin/env python3
+"""Commons + Waldorf v1.10
+
+Consolidated standard-library-only reference implementation.
+Commons remains domain-neutral; Waldorf is an attached table-steward/domain layer.
+Includes CT/BCTD compatibility, CCB snapshots, D0 deep-save cascade, and
+atomic rollback with sequestered displaced history.
+"""
+from __future__ import annotations
+
+import copy, hashlib, json, os, tempfile, time, uuid
+from dataclasses import dataclass, field, asdict
+from typing import Any, Dict, List, Optional, Tuple
+
+MAX_DIRECTORY_BYTES = 32_000
+
+
+def now() -> float: return time.time()
+def deep_copy(x): return copy.deepcopy(x)
+def stable_json(x): return json.dumps(x, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+def crc(x, length=8): return hashlib.sha256(stable_json(x).encode()).hexdigest()[:length].upper()
+
+
+@dataclass(frozen=True)
+class Participant:
+    participant_id: str
+    kind: str = "OTHER"
+
+
+@dataclass
+class AuditEvent:
+    event_id: str
+    timestamp: float
+    actor: str
+    table_id: str
+    operation: str
+    result: str
+    details: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class HistoryVersion:
+    version_id: str
+    version: int
+    timestamp: float
+    data: Dict[str, Any]
+    integrity: str
+    parent_version_id: Optional[str] = None
+
+
+class Authorization:
+    """Table permissions. Identity/name administration is deliberately absent."""
+    def __init__(self):
+        self.table_roles: Dict[str, Dict[str, set]] = {}
+        self.system_rollback_roles = {"SYSTEM"}
+        self.system_recall_roles = {"SYSTEM"}
+
+    def grant(self, table_id, participant_id, permission):
+        self.table_roles.setdefault(table_id, {}).setdefault(participant_id, set()).add(permission)
+
+    def revoke(self, table_id, participant_id, permission):
+        self.table_roles.setdefault(table_id, {}).setdefault(participant_id, set()).discard(permission)
+
+    def allowed(self, table_id, actor, permission):
+        return permission in self.table_roles.get(table_id, {}).get(actor, set())
+
+
+class CommonsTable:
+    def __init__(self, table_id: str, name: str):
+        self.table_id, self.name = table_id, name
+        self.state: Dict[str, Any] = {}
+        self.history: List[HistoryVersion] = []
+        self.active_version_id: Optional[str] = None
+        self.sequestered: Dict[str, Dict[str, Any]] = {}
+        self.rollback_events: List[Dict[str, Any]] = []
+        self.rollback_policy: Dict[str, Any] = {
+            "table_consensus_required": True,
+            "allowed_state_categories": ["table_state", "conversation_state", "domain_state"],
+        }
+        self.participants: set[str] = set()
+        self.auth = Authorization()
+        self._commit_initial()
+
+    def _new_version(self, data, parent=None, version=None):
+        if version is None: version = (self.history[-1].version + 1) if self.history else 1
+        vid = str(uuid.uuid4())
+        h = HistoryVersion(vid, version, now(), deep_copy(data), crc(data), parent)
+        self.history.append(h)
+        self.active_version_id = vid
+        return h
+
+    def _commit_initial(self): self._new_version({})
+
+    def current(self): return next(h for h in self.history if h.version_id == self.active_version_id)
+
+    def version(self, version_id: str):
+        for h in self.history:
+            if h.version_id == version_id or str(h.version) == str(version_id): return h
+        return None
+
+    def _verify(self, h): return h.integrity == crc(h.data)
+
+    def save_state(self, actor: str, data: Dict[str, Any], category="table_state"):
+        if not self.auth.allowed(self.table_id, actor, "WRITE") and actor != "SYSTEM":
+            raise PermissionError("WRITE_NOT_AUTHORIZED")
+        proposed = deep_copy(self.state)
+        proposed[category] = deep_copy(data)
+        if len(stable_json(proposed).encode()) > MAX_DIRECTORY_BYTES:
+            raise ValueError("OVERFLOW")
+        self.state = proposed
+        return self._new_version(self.state, self.active_version_id)
+
+    def rollback(self, actor: str, target_version_id: str, *, system_priority=False,
+                 consensus=True, reason="", expected_current_version_id=None):
+        """Atomic rollback. Displaced active state is sequestered, never deleted."""
+        before = self.current()
+        if expected_current_version_id and before.version_id != expected_current_version_id:
+            return self._rollback_fail(actor, "ROLLBACK_STALE_STATE", target_version_id, before, reason)
+        if system_priority:
+            authorized = actor == "SYSTEM"
+        else:
+            authorized = consensus and (actor == "SYSTEM" or self.auth.allowed(self.table_id, actor, "ROLLBACK"))
+        if not authorized:
+            return self._rollback_fail(actor, "ROLLBACK_ACCESS_DENIED", target_version_id, before, reason)
+        target = self.version(target_version_id)
+        if target is None:
+            return self._rollback_fail(actor, "ROLLBACK_VERSION_NOT_FOUND", target_version_id, before, reason)
+        if not self._verify(target):
+            return self._rollback_fail(actor, "ROLLBACK_INTEGRITY_FAILURE", target_version_id, before, reason)
+        if target.version_id == before.version_id:
+            return self._rollback_fail(actor, "ROLLBACK_NOOP", target_version_id, before, reason)
+
+        # Save exact pre-operation state for failure recovery.
+        pre = {"active": deep_copy(before.data), "active_version_id": before.version_id,
+               "timestamp": now(), "target": target.version_id}
+        event_id = str(uuid.uuid4())
+        displaced = [h for h in self.history if h.version > target.version]
+        self.sequestered[event_id] = {
+            "original_table_id": self.table_id,
+            "rollback_event_id": event_id,
+            "displaced_version_ids": [h.version_id for h in displaced],
+            "history": [asdict(h) for h in displaced],
+            "access": "EXPLICIT_HISTORICAL_ONLY",
+            "ai_working_context": False,
+            "retention": "SEPARATE_POLICY",
+        }
+        try:
+            # The rollback itself creates a branch version derived from target.
+            branch = self._new_version(target.data, parent=target.version_id)
+            branch.data = deep_copy(target.data)
+            branch.integrity = crc(branch.data)
+            self.state = deep_copy(branch.data)
+            self.rollback_events.append({
+                "event_id": event_id, "actor": actor, "target_version": target.version_id,
+                "previous_active_version": before.version_id, "resulting_version": branch.version_id,
+                "timestamp": now(), "reason": reason, "sequestered_record": event_id,
+                "system_priority": system_priority,
+            })
+            return {"status": "ROLLBACK_SUCCESS", "event_id": event_id,
+                    "previous": before.version_id, "target": target.version_id,
+                    "result": branch.version_id, "sequestered": event_id}
+        except Exception as exc:
+            # Automatic save-state capture of the failure and safe reset to earliest working version.
+            failure_id = str(uuid.uuid4())
+            self.sequestered[failure_id] = {"type": "ROLLBACK_FAILURE_SAVE", "event_id": event_id,
+                                            "failure": repr(exc), "pre_state": pre,
+                                            "timestamp": now(), "access": "SYSTEM_ONLY"}
+            working = self._earliest_working()
+            self.state = deep_copy(working.data)
+            self.active_version_id = working.version_id
+            self.rollback_events.append({"event_id": event_id, "actor": actor,
+                "result": "ROLLBACK_FAILED_RESET", "failure_save": failure_id,
+                "reset_version": working.version_id, "timestamp": now()})
+            return {"status": "ROLLBACK_FAILED", "failure_save": failure_id,
+                    "reset_version": working.version_id}
+
+    def _earliest_working(self):
+        for h in self.history:
+            if self._verify(h): return h
+        raise RuntimeError("NO_WORKING_VERSION")
+
+    def _rollback_fail(self, actor, status, target, before, reason):
+        sid = str(uuid.uuid4())
+        self.sequestered[sid] = {"type": "ROLLBACK_FAILURE_SAVE", "status": status,
+            "timestamp": now(), "pre_state": deep_copy(before.data),
+            "pre_version": before.version_id, "target": target, "reason": reason,
+            "access": "SYSTEM_ONLY"}
+        self.rollback_events.append({"event_id": sid, "actor": actor, "result": status,
+                                     "timestamp": now(), "saved_failure_state": sid})
+        return {"status": status, "failure_save": sid, "active": before.version_id}
+
+
+class CCB:
+    def __init__(self):
+        self.root = None; self.arcs=[]; self.sessions=[]; self.snapshots=[]
+    def init(self, campaign_id): self.root={"id":campaign_id,"system":"CCB","created":now(),"status":"ACTIVE"}; return self.root
+    def arc_new(self,name):
+        x={"id":f"ARC_{len(self.arcs)+1:03d}","parent":self.root["id"],"name":name}; self.arcs.append(x); return x
+    def session_new(self,location):
+        parent=self.arcs[-1]["id"] if self.arcs else self.root["id"]
+        x={"id":f"SES_{len(self.sessions)+1:03d}","parent":parent,"location":location,"date_real":now()}; self.sessions.append(x); return x
+    def snapshot(self, trigger, state, entry=0):
+        parent=self.sessions[-1]["id"] if self.sessions else (self.root["id"] if self.root else None)
+        prev=self.snapshots[-1]["data"] if self.snapshots else {}
+        delta={k:v for k,v in state.items() if prev.get(k)!=v}
+        x={"id":f"SNAP_{len(self.snapshots)+1:03d}","parent":parent,"trigger":trigger,
+           "timestamp":entry,"crc":crc(state,4),"data":delta}; self.snapshots.append(x); return x
+    def get(self,snap_id,field):
+        s=next((x for x in self.snapshots if x["id"]==snap_id),None)
+        if not s: return None
+        key=field.split("."); cur=s
+        while cur:
+            data=cur.get("data",{})
+            obj=data
+            for k in key:
+                if not isinstance(obj,dict) or k not in obj: obj=None; break
+                obj=obj[k]
+            if obj is not None:return obj
+            parent=cur.get("parent")
+            cur=next((z for z in self.snapshots+self.sessions+self.arcs+[self.root] if z and z.get("id")==parent),None)
+        return None
+    def diff(self,a,b):
+        aa=next(x for x in self.snapshots if x["id"]==a); bb=next(x for x in self.snapshots if x["id"]==b)
+        keys=set(aa.get("data",{}))|set(bb.get("data",{})); return {k:(aa.get("data",{}).get(k),bb.get("data",{}).get(k)) for k in keys if aa.get("data",{}).get(k)!=bb.get("data",{}).get(k)}
+
+
+class WaldorfOverlay:
+    def __init__(self):
+        self.NAME="Waldorf the Game Masters Servant"; self.ALIAS="D20CAD-ID"; self.VER="1.2"; self.BOOT="UNLOCKED"
+        self.SYS_CRC="SYS002"; self.AUTO_DEBUG=0; self.DEBUG_MODE=0; self.MONITOR_HALT=0
+        self.goldfish_brain={"readall":None,"crc_checks":[],"debug_logs":[],"system_logs":[],"last_error":None,"monitors":[],"gm_context":None,"retention_log":[],"deep_save_log":[]}
+        self.retention={"D0":{"HISTORY":5,"L1":10,"L2":20,"L3":30,"L4":40,"L5":999999},"D1":{"HISTORY":20,"CLEAR":"PROTECT"},"D2":{"HISTORY":20,"CLEAR":"PROTECT"},"D3":{"HISTORY":20,"CLEAR":"PROTECT"},"D4":{"HISTORY":20,"CLEAR":"PROTECT"},"D5":{"HISTORY":20,"TIMELINE":50,"CLEAR":"PROTECT"},"D6":{"HISTORY":20,"SESSION":"PURGE","CLEAR":"PROTECT"}}
+        self.dirs=self._default_dirs(); self.LAST_5_CT_COMMANDS=[]
+        for d in self.dirs:self.dirs[d]["CRC"]=crc(self.dirs[d]["DATA"],5)
+        self.ccb=CCB()
+        self.table=CommonsTable("WALDORF-TABLE","Waldorf")
+        self.table.auth.grant(self.table.table_id,"SYSTEM","WRITE"); self.table.auth.grant(self.table.table_id,"SYSTEM","ROLLBACK")
+        self._sync_table_state()
+
+    def _default_dirs(self):
+        return {
+        "D0":{"VIEW":0,"EDIT":0,"CRC":None,"NAME":"deep_save","VER":1,"DATA":{"L1":{},"L2":{},"L3":{},"L4":{},"L5":{},"meta":{"last_snapshot":0,"cascade_count":0}},"SCHEMA":"deep","HISTORY":[]},
+        "D1":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"chars","VER":1,"DATA":{"schema":"pc","entries":{"[SAVE]template":{"name":"","class":"","level":1,"stats":{"str":10,"dex":10,"con":10,"int":10,"wis":10,"cha":10},"hp":{"current":10,"max":10},"ac":10,"inventory":[],"skills":{},"conditions":[]}}},"SCHEMA":"character","HISTORY":[]},
+        "D2":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"world","VER":1,"DATA":{"[SAVE]system":"d20_srd5.1","campaign":"New Campaign","time":{"day":1,"hour":8,"season":"Spring"},"weather":"Clear","locations":{"tavern":{"name":"The Drunken Dragon","npcs":[],"notes":"Starting location"}},"factions":{},"house_rules":[],"ability_scores":["str","dex","con","int","wis","cha"]},"SCHEMA":"world","HISTORY":[]},
+        "D3":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"npcs","VER":1,"DATA":{"schema":"npc","entries":{"[SAVE]bartender":{"name":"Grek Ironjaw","role":"Bartender","disposition":"friendly","location":"tavern","secrets":["Owes money to thieves guild"],"stats":{"hp":15,"ac":11},"notes":"Knows local rumors"}}},"SCHEMA":"npc","HISTORY":[]},
+        "D4":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"items","VER":1,"DATA":{"schema":"item","entries":{"[SAVE]healing_potion":{"name":"Potion of Healing","type":"consumable","rarity":"common","effect":"2d4+2 healing","value":"50gp","attunement":False}}},"SCHEMA":"item","HISTORY":[]},
+        "D5":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"events","VER":1,"DATA":{"schema":"event","timeline":[],"active_quests":{"[SAVE]q1":{"title":"Rat Problem","giver":"bartender","objective":"Clear rats from cellar","reward":"20gp + free room","status":"active"}},"triggers":{}},"SCHEMA":"event","HISTORY":[]},
+        "D6":{"VIEW":1,"EDIT":1,"CRC":None,"NAME":"notes","VER":1,"DATA":{"markers":{},"session_points":[]},"SCHEMA":"note","HISTORY":[]}}
+
+    def _log(self,e): self.goldfish_brain["system_logs"].append(f"{now()}|{e}")
+    def _save_key(self,k): return str(k).startswith("[SAVE]")
+    def _extract_save(self,x):
+        if isinstance(x,dict):
+            r={}
+            for k,v in x.items():
+                if self._save_key(k): r[k]=deep_copy(v)
+                elif isinstance(v,(dict,list)):
+                    q=self._extract_save(v)
+                    if q:r[k]=q
+            return r or None
+        if isinstance(x,list):
+            r=[q for i in x if (q:=self._extract_save(i)) is not None]; return r or None
+        return None
+    def _update(self,d):
+        old=deep_copy(self.dirs[d]["DATA"]); self.dirs[d]["HISTORY"].append({"VER":self.dirs[d]["VER"],"DATA":old,"CRC":self.dirs[d]["CRC"]})
+        self.dirs[d]["VER"]+=1; self.dirs[d]["CRC"]=crc(self.dirs[d]["DATA"],5); self._prune(d); self._sync_table_state()
+    def _prune(self,d):
+        h=self.dirs[d]["HISTORY"]; m=self.retention[d].get("HISTORY",20)
+        if len(h)>m:
+            protected=[x for x in h if self._extract_save(x["DATA"])]; other=[x for x in h if x not in protected]
+            self.dirs[d]["HISTORY"]=(protected+other[-max(0,m-len(protected)):])
+    def _cascade(self):
+        d=self.dirs["D0"]["DATA"]
+        for i in range(1,5):
+            a,b=f"L{i}",f"L{i+1}"; limit=self.retention["D0"][a]
+            if len(d[a])>limit:
+                for k,v in sorted(d[a].items(),key=lambda z:z[1].get("_timestamp",0))[:len(d[a])-limit]:
+                    if not self._save_key(k): d[b][k]=v; del d[a][k]
+        d["meta"]["cascade_count"]+=1; self.dirs["D0"]["CRC"]=crc(d,5)
+    def deep_snapshot(self):
+        snap={"_timestamp":now()}
+        for k in ["D1","D2","D3","D4","D5","D6"]:
+            x=self._extract_save(self.dirs[k]["DATA"])
+            if x:snap[k]=x
+        key=f"snapshot_{int(now()*1000)}"; self.dirs["D0"]["DATA"]["L1"][key]=snap; self.dirs["D0"]["DATA"]["meta"]["last_snapshot"]=now(); self._cascade(); self.goldfish_brain["deep_save_log"].append(key); self._log(f"DEEP|SNAPSHOT|{key}"); return key
+    def _sync_table_state(self):
+        self.table.state={"directories":{k:{"VER":v["VER"],"CRC":v["CRC"],"DATA":deep_copy(v["DATA"])} for k,v in self.dirs.items()}}
+
+    def _read(self,d):
+        if not self.dirs[d]["VIEW"]: return "ERROR|VIEW_DENIED|"+d
+        return f"READ|OK|{d}|DATA="+json.dumps(self.dirs[d]["DATA"],ensure_ascii=False)
+    def ct(self,s):
+        if self.MONITOR_HALT:return "D20CAD-ID<ERROR|HALT|BOOT=LOCKED>"
+        if not isinstance(s,str) or not s.startswith("CT>"):
+            self.goldfish_brain["last_error"]="SYNTAX"; return "D20CAD-ID<ERROR|SYNTAX|M5>"
+        self.LAST_5_CT_COMMANDS.append(s); self.LAST_5_CT_COMMANDS=self.LAST_5_CT_COMMANDS[-5:]
+        p=s[3:].split("|"); cmd=p[0].upper()
+        try:
+            if cmd=="READ" and len(p)==2:return "D20CAD-ID<"+self._read(p[1])+">"
+            if cmd=="READALL" and len(p)==1:return "D20CAD-ID<READALL|OK|DATA="+json.dumps({k:{"NAME":v["NAME"],"VER":v["VER"],"CRC":v["CRC"]} for k,v in self.dirs.items() if v["VIEW"]})+">"
+            if cmd=="WRITE" and len(p)>=3:
+                d=p[1];
+                if d not in self.dirs:return "D20CAD-ID<ERROR|WRITE|INVALID_DIR>"
+                if not self.dirs[d]["EDIT"]:return f"D20CAD-ID<ERROR|EDIT_DENIED|{d}>"
+                self.dirs[d]["DATA"]={"raw":"|".join(p[2:])}; self._update(d); return f"D20CAD-ID<WRITE|OK|{d}|CRC={self.dirs[d]['CRC']}>"
+            if cmd=="APPEND" and len(p)>=3:
+                d=p[1];
+                if d not in self.dirs:return "D20CAD-ID<ERROR|APPEND|INVALID_DIR>"
+                if not self.dirs[d]["EDIT"]:return f"D20CAD-ID<ERROR|EDIT_DENIED|{d}>"
+                self.dirs[d]["DATA"].setdefault("entries",[]).append("|".join(p[2:]));
+                if len(stable_json(self.dirs[d]["DATA"]).encode())>MAX_DIRECTORY_BYTES:self.dirs[d]["DATA"]["entries"].pop(); return f"D20CAD-ID<ERROR|OVERFLOW|{d}>"
+                self._update(d); return f"D20CAD-ID<APPEND|OK|{d}|CRC={self.dirs[d]['CRC']}>"
+            if cmd=="CLEAR" and len(p)==2:
+                d=p[1];
+                if not self.dirs[d]["EDIT"]:return f"D20CAD-ID<ERROR|EDIT_DENIED|{d}>"
+                self.dirs[d]["DATA"]={}; self._update(d); return f"D20CAD-ID<CLEAR|OK|{d}|CRC={self.dirs[d]['CRC']}>"
+            if cmd in ("LOCK","UNLOCK") and len(p)==2:
+                d=p[1]; self.dirs[d]["VIEW"]=1 if cmd=="UNLOCK" else 0; self.dirs[d]["EDIT"]=self.dirs[d]["EDIT"] if cmd=="UNLOCK" else 0; return f"D20CAD-ID<PERM|OK|{d}_{cmd}ED>"
+            if cmd=="GRANT" and len(p)==2:self.dirs[p[1]]["EDIT"]=1;return f"D20CAD-ID<PERM|OK|{p[1]}_EDIT=1>"
+            if cmd=="REVOKE" and len(p)==2:self.dirs[p[1]]["EDIT"]=0;return f"D20CAD-ID<PERM|OK|{p[1]}_EDIT=0>"
+            if cmd=="LOCKALL" and len(p)==1:
+                for d in self.dirs:self.dirs[d]["VIEW"]=self.dirs[d]["EDIT"]=0
+                self.BOOT="LOCKED"; self.MONITOR_HALT=1; return "D20CAD-ID<PERM|OK|ALL_LOCKED>"
+            if cmd=="RECALL" and len(p)==2:
+                d=p[1]; h=self.dirs[d]["HISTORY"][-1] if self.dirs[d]["HISTORY"] else {"DATA":self.dirs[d]["DATA"]}; return "D20CAD-ID<RECALL|OK|DATA="+json.dumps(h["DATA"])+">"
+            if cmd=="RECALL_VER" and len(p)==3:
+                d,v=p[1],p[2]; found=next((h for h in self.dirs[d]["HISTORY"] if str(h["VER"])==v),None)
+                if found:return "D20CAD-ID<RECALL_VER|OK|DATA="+json.dumps(found["DATA"])+">"
+                if v=="0":return "D20CAD-ID<RECALL_VER|OK|BLANK>"
+                return "D20CAD-ID<RECALL_VER|VERSION_NOT_FOUND>"
+            if cmd=="DIFF" and len(p)==4:return self._diff(p[1],p[2],p[3])
+            if cmd=="CRC_CHECK" and len(p)==2 and p[1].upper()=="ALL":
+                bad=[d for d,v in self.dirs.items() if v["CRC"]!=crc(v["DATA"],5)]
+                if bad:self.MONITOR_HALT=1;self.BOOT="LOCKED";return "D20CAD-ID<CRC_CHECK|FAIL|"+json.dumps(bad)
+                return "D20CAD-ID<CRC_CHECK|PASS>"
+            if cmd=="DEEP" and len(p)>=2:
+                sub=p[1].upper();
+                if sub=="SAVE":return "D20CAD-ID<DEEP|SAVE|OK|"+self.deep_snapshot()+">"
+            if cmd=="STATUS":return f"D20CAD-ID<STATUS|OK|BOOT={self.BOOT}|HALT={self.MONITOR_HALT}|DEEP={len(self.goldfish_brain['deep_save_log'])}>"
+            return "D20CAD-ID<ERROR|SYNTAX|UNKNOWN_COMMAND>"
+        except Exception as e:
+            self.goldfish_brain["last_error"]=repr(e); self._log(f"EXCEPTION|{s}|{e}"); return "D20CAD-ID<ERROR|INTERNAL>"
+    def _diff(self,d,a,b):
+        # Supports current + retained versions without the historical arity bug.
+        va=next((h["DATA"] for h in self.dirs[d]["HISTORY"] if str(h["VER"])==a),{})
+        vb=next((h["DATA"] for h in self.dirs[d]["HISTORY"] if str(h["VER"])==b),self.dirs[d]["DATA"] if str(self.dirs[d]["VER"])==b else {})
+        keys=set(va)|set(vb); delta={k:[va.get(k),vb.get(k)] for k in keys if va.get(k)!=vb.get(k)}
+        return "D20CAD-ID<DIFF|OK|DATA="+json.dumps(delta)+">"
+
+
+class Waldorf:
+    def __init__(self):
+        self.overlay=WaldorfOverlay(); self.identity=Participant("waldorf-agent","AI")
+        self.source_discipline="designated source files and current table state only"
+    def handle(self, message): return self.overlay.ct(message)
+    def rollback(self, target, reason="", expected=None, system_priority=False):
+        return self.overlay.table.rollback("SYSTEM",target,reason=reason,expected_current_version_id=expected,system_priority=system_priority)
+
+
+def self_test():
+    w=Waldorf(); o=w.overlay
+    assert "STATUS|OK" in o.ct("CT>STATUS")
+    assert "READ|OK|D1" in o.ct("CT>READ|D1")
+    assert "CRC_CHECK|PASS" in o.ct("CT>CRC_CHECK|ALL")
+    snap=o.deep_snapshot(); assert snap
+    t=o.table
+    t.auth.grant(t.table_id,"TABLE_ADMIN","ROLLBACK")
+    t.auth.grant(t.table_id,"TABLE_ADMIN","WRITE")
+    v2=t.save_state("TABLE_ADMIN",{"scene":"A"})
+    v3=t.save_state("TABLE_ADMIN",{"scene":"B"})
+    r=t.rollback("TABLE_ADMIN",v2.version_id,consensus=True,expected_current_version_id=v3.version_id)
+    assert r["status"]=="ROLLBACK_SUCCESS"
+    assert t.current().data==v2.data
+    assert r["sequestered"] in t.sequestered
+    denied=t.rollback("TABLE_ADMIN",v2.version_id,consensus=False)
+    assert denied["status"]=="ROLLBACK_ACCESS_DENIED"
+    # Ensure identity/name administration is not present on table authorization surface.
+    assert "NAME_ADMIN" not in t.auth.table_roles.get(t.table_id,{}).get("TABLE_ADMIN",set())
+    return {"status":"PASS","deep_snapshot":snap,"rollback":r,"denied":denied}
+
+
+def main():
+    print(json.dumps(self_test(),indent=2,default=str))
+
+if __name__=="__main__": main()
+/*
+ * Commons + Waldorf v1.10 — Java port
+ *
+ * Standard-library-only implementation of the updated Commons + Waldorf
+ * reference program. Commons remains domain-neutral; Waldorf is the attached
+ * table-steward/domain layer.
+ *
+ * Includes:
+ *   - CT/BCTD command compatibility
+ *   - CCB campaign snapshots
+ *   - D0 deep-save cascade
+ *   - versioned state/history
+ *   - integrity checks
+ *   - atomic rollback with sequestered displaced history
+ *   - rollback failure-state capture
+ *   - permissions and hard-stop behavior
+ *
+ * Save this file as Waldorf_Commons_v1_10.java when compiling.
+ */
+
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.*;
+
+public class Waldorf_Commons_v1_10 {
+    static final int MAX_DIRECTORY_BYTES = 32_000;
+
+    static long now() { return System.currentTimeMillis(); }
+
+    @SuppressWarnings("unchecked")
+    static <T> T deepCopy(T value) {
+        if (value instanceof Map<?, ?>) {
+            Map<String,Object> out = new LinkedHashMap<>();
+            for (Map.Entry<?,?> e : ((Map<?,?>) value).entrySet())
+                out.put(String.valueOf(e.getKey()), deepCopy(e.getValue()));
+            return (T) out;
+        }
+        if (value instanceof List<?>) {
+            List<Object> out = new ArrayList<>();
+            for (Object x : (List<?>) value) out.add(deepCopy(x));
+            return (T) out;
+        }
+        return value;
+    }
+
+    static String stableJson(Object value) { return Json.stringify(value, true); }
+
+    static String crc(Object value, int length) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] bytes = md.digest(stableJson(value).getBytes(StandardCharsets.UTF_8));
+            StringBuilder sb = new StringBuilder();
+            for (byte b : bytes) sb.append(String.format("%02x", b));
+            return sb.substring(0, length).toUpperCase(Locale.ROOT);
+        } catch (Exception e) { throw new RuntimeException(e); }
+    }
+
+    static String id() { return UUID.randomUUID().toString(); }
+
+    static class Participant {
+        final String participantId;
+        final String kind;
+        Participant(String participantId) { this(participantId, "OTHER"); }
+        Participant(String participantId, String kind) { this.participantId = participantId; this.kind = kind; }
+    }
+
+    static class Authorization {
+        final Map<String,Map<String,Set<String>>> tableRoles = new LinkedHashMap<>();
+        final Set<String> systemRollbackRoles = new HashSet<>(Collections.singletonList("SYSTEM"));
+        final Set<String> systemRecallRoles = new HashSet<>(Collections.singletonList("SYSTEM"));
+
+        void grant(String tableId, String participantId, String permission) {
+            tableRoles.computeIfAbsent(tableId, k -> new LinkedHashMap<>())
+                      .computeIfAbsent(participantId, k -> new HashSet<>()).add(permission);
+        }
+        void revoke(String tableId, String participantId, String permission) {
+            tableRoles.computeIfAbsent(tableId, k -> new LinkedHashMap<>())
+                      .computeIfAbsent(participantId, k -> new HashSet<>()).remove(permission);
+        }
+        boolean allowed(String tableId, String actor, String permission) {
+            return tableRoles.getOrDefault(tableId, Collections.emptyMap())
+                    .getOrDefault(actor, Collections.emptySet()).contains(permission);
+        }
+    }
+
+    static class HistoryVersion {
+        final String versionId;
+        final int version;
+        final long timestamp;
+        Map<String,Object> data;
+        String integrity;
+        final String parentVersionId;
+        HistoryVersion(String versionId, int version, long timestamp, Map<String,Object> data,
+                       String integrity, String parentVersionId) {
+            this.versionId=versionId; this.version=version; this.timestamp=timestamp;
+            this.data=data; this.integrity=integrity; this.parentVersionId=parentVersionId;
+        }
+    }
+
+    static class CommonsTable {
+        final String tableId, name;
+        Map<String,Object> state = new LinkedHashMap<>();
+        final List<HistoryVersion> history = new ArrayList<>();
+        String activeVersionId;
+        final Map<String,Map<String,Object>> sequestered = new LinkedHashMap<>();
+        final List<Map<String,Object>> rollbackEvents = new ArrayList<>();
+        final Map<String,Object> rollbackPolicy = new LinkedHashMap<>();
+        final Set<String> participants = new HashSet<>();
+        final Authorization auth = new Authorization();
+
+        CommonsTable(String tableId, String name) {
+            this.tableId=tableId; this.name=name;
+            rollbackPolicy.put("table_consensus_required", true);
+            rollbackPolicy.put("allowed_state_categories", Arrays.asList("table_state","conversation_state","domain_state"));
+            commitInitial();
+        }
+
+        HistoryVersion newVersion(Map<String,Object> data, String parent, Integer version) {
+            int v = version != null ? version : (history.isEmpty() ? 1 : history.get(history.size()-1).version + 1);
+            HistoryVersion h = new HistoryVersion(id(), v, now(), deepCopy(data), crc(data,8), parent);
+            history.add(h); activeVersionId=h.versionId; return h;
+        }
+        void commitInitial() { newVersion(new LinkedHashMap<>(), null, null); }
+        HistoryVersion current() {
+            for (HistoryVersion h: history) if (h.versionId.equals(activeVersionId)) return h;
+            throw new IllegalStateException("ACTIVE_VERSION_NOT_FOUND");
+        }
+        HistoryVersion version(String versionId) {
+            for (HistoryVersion h: history)
+                if (h.versionId.equals(versionId) || String.valueOf(h.version).equals(versionId)) return h;
+            return null;
+        }
+        boolean verify(HistoryVersion h) { return h.integrity.equals(crc(h.data,8)); }
+
+        HistoryVersion saveState(String actor, Map<String,Object> data, String category) {
+            if (!auth.allowed(tableId, actor, "WRITE") && !"SYSTEM".equals(actor))
+                throw new SecurityException("WRITE_NOT_AUTHORIZED");
+            Map<String,Object> proposed=deepCopy(state); proposed.put(category, deepCopy(data));
+            if (stableJson(proposed).getBytes(StandardCharsets.UTF_8).length > MAX_DIRECTORY_BYTES)
+                throw new IllegalArgumentException("OVERFLOW");
+            state=proposed; return newVersion(state, activeVersionId, null);
+        }
+
+        Map<String,Object> rollback(String actor, String targetVersionId, boolean systemPriority,
+                                    boolean consensus, String reason, String expectedCurrentVersionId) {
+            HistoryVersion before=current();
+            if (expectedCurrentVersionId != null && !before.versionId.equals(expectedCurrentVersionId))
+                return rollbackFail(actor,"ROLLBACK_STALE_STATE",targetVersionId,before,reason);
+            boolean authorized = systemPriority ? "SYSTEM".equals(actor)
+                    : consensus && ("SYSTEM".equals(actor) || auth.allowed(tableId,actor,"ROLLBACK"));
+            if (!authorized) return rollbackFail(actor,"ROLLBACK_ACCESS_DENIED",targetVersionId,before,reason);
+            HistoryVersion target=version(targetVersionId);
+            if (target==null) return rollbackFail(actor,"ROLLBACK_VERSION_NOT_FOUND",targetVersionId,before,reason);
+            if (!verify(target)) return rollbackFail(actor,"ROLLBACK_INTEGRITY_FAILURE",targetVersionId,before,reason);
+            if (target.versionId.equals(before.versionId)) return rollbackFail(actor,"ROLLBACK_NOOP",targetVersionId,before,reason);
+
+            String eventId=id();
+            Map<String,Object> pre=new LinkedHashMap<>();
+            pre.put("active",deepCopy(before.data)); pre.put("active_version_id",before.versionId);
+            pre.put("timestamp",now()); pre.put("target",target.versionId);
+            List<Map<String,Object>> displaced=new ArrayList<>();
+            List<String> displacedIds=new ArrayList<>();
+            for (HistoryVersion h:history) if(h.version>target.version){ displacedIds.add(h.versionId); displaced.add(historyMap(h)); }
+            Map<String,Object> sq=new LinkedHashMap<>();
+            sq.put("original_table_id",tableId); sq.put("rollback_event_id",eventId);
+            sq.put("displaced_version_ids",displacedIds); sq.put("history",displaced);
+            sq.put("access","EXPLICIT_HISTORICAL_ONLY"); sq.put("ai_working_context",false); sq.put("retention","SEPARATE_POLICY");
+            sequestered.put(eventId,sq);
+            try {
+                HistoryVersion branch=newVersion(target.data,target.versionId,null);
+                branch.data=deepCopy(target.data); branch.integrity=crc(branch.data,8); state=deepCopy(branch.data);
+                Map<String,Object> ev=new LinkedHashMap<>();
+                ev.put("event_id",eventId); ev.put("actor",actor); ev.put("target_version",target.versionId);
+                ev.put("previous_active_version",before.versionId); ev.put("resulting_version",branch.versionId);
+                ev.put("timestamp",now()); ev.put("reason",reason); ev.put("sequestered_record",eventId); ev.put("system_priority",systemPriority);
+                rollbackEvents.add(ev);
+                return mapOf("status","ROLLBACK_SUCCESS","event_id",eventId,"previous",before.versionId,
+                        "target",target.versionId,"result",branch.versionId,"sequestered",eventId);
+            } catch(Exception exc) {
+                String failureId=id(); Map<String,Object> fail=new LinkedHashMap<>();
+                fail.put("type","ROLLBACK_FAILURE_SAVE"); fail.put("event_id",eventId); fail.put("failure",exc.toString());
+                fail.put("pre_state",pre); fail.put("timestamp",now()); fail.put("access","SYSTEM_ONLY"); sequestered.put(failureId,fail);
+                HistoryVersion working=earliestWorking(); state=deepCopy(working.data); activeVersionId=working.versionId;
+                rollbackEvents.add(mapOf("event_id",eventId,"actor",actor,"result","ROLLBACK_FAILED_RESET",
+                        "failure_save",failureId,"reset_version",working.versionId,"timestamp",now()));
+                return mapOf("status","ROLLBACK_FAILED","failure_save",failureId,"reset_version",working.versionId);
+            }
+        }
+        HistoryVersion earliestWorking(){ for(HistoryVersion h:history) if(verify(h)) return h; throw new IllegalStateException("NO_WORKING_VERSION"); }
+        Map<String,Object> rollbackFail(String actor,String status,String target,HistoryVersion before,String reason){
+            String sid=id(); Map<String,Object> s=new LinkedHashMap<>();
+            s.put("type","ROLLBACK_FAILURE_SAVE"); s.put("status",status); s.put("timestamp",now());
+            s.put("pre_state",deepCopy(before.data)); s.put("pre_version",before.versionId); s.put("target",target); s.put("reason",reason); s.put("access","SYSTEM_ONLY");
+            sequestered.put(sid,s); rollbackEvents.add(mapOf("event_id",sid,"actor",actor,"result",status,"timestamp",now(),"saved_failure_state",sid));
+            return mapOf("status",status,"failure_save",sid,"active",before.versionId);
+        }
+        static Map<String,Object> historyMap(HistoryVersion h){ return mapOf("version_id",h.versionId,"version",h.version,"timestamp",h.timestamp,"data",deepCopy(h.data),"integrity",h.integrity,"parent_version_id",h.parentVersionId); }
+    }
+
+    static class CCB {
+        Map<String,Object> root; final List<Map<String,Object>> arcs=new ArrayList<>(), sessions=new ArrayList<>(), snapshots=new ArrayList<>();
+        Map<String,Object> init(String campaignId){ root=mapOf("id",campaignId,"system","CCB","created",now(),"status","ACTIVE"); return root; }
+        Map<String,Object> arcNew(String name){ Map<String,Object>x=mapOf("id",String.format("ARC_%03d",arcs.size()+1),"parent",root.get("id"),"name",name);arcs.add(x);return x; }
+        Map<String,Object> sessionNew(String location){ Object parent=arcs.isEmpty()?root.get("id"):arcs.get(arcs.size()-1).get("id");Map<String,Object>x=mapOf("id",String.format("SES_%03d",sessions.size()+1),"parent",parent,"location",location,"date_real",now());sessions.add(x);return x; }
+        Map<String,Object> snapshot(String trigger,Map<String,Object> state,long entry){ Object parent=!sessions.isEmpty()?sessions.get(sessions.size()-1).get("id"):(root==null?null:root.get("id")); Map<String,Object>prev=snapshots.isEmpty()?new LinkedHashMap<>():castMap(snapshots.get(snapshots.size()-1).get("data"));Map<String,Object>delta=new LinkedHashMap<>();for(String k:state.keySet())if(!Objects.equals(prev.get(k),state.get(k)))delta.put(k,state.get(k));Map<String,Object>x=mapOf("id",String.format("SNAP_%03d",snapshots.size()+1),"parent",parent,"trigger",trigger,"timestamp",entry,"crc",crc(state,4),"data",delta);snapshots.add(x);return x; }
+        Object get(String snapId,String field){ Map<String,Object>s=null;for(Map<String,Object>x:snapshots)if(snapId.equals(x.get("id")))s=x;if(s==null)return null;String[]key=field.split("\\.");Map<String,Object>cur=s;while(cur!=null){Object obj=cur.get("data");for(String k:key){if(!(obj instanceof Map)||!((Map<?,?>)obj).containsKey(k)){obj=null;break;}obj=((Map<?,?>)obj).get(k);}if(obj!=null)return obj;Object p=cur.get("parent");cur=findById(p);}return null; }
+        Map<String,Object>findById(Object id){if(id==null)return null;for(Map<String,Object>x:snapshots)if(id.equals(x.get("id")))return x;for(Map<String,Object>x:sessions)if(id.equals(x.get("id")))return x;for(Map<String,Object>x:arcs)if(id.equals(x.get("id")))return x;return root!=null&&id.equals(root.get("id"))?root:null;}
+        Map<String,Object> diff(String a,String b){Map<String,Object>aa=findById(a),bb=findById(b);if(aa==null||bb==null)throw new IllegalArgumentException("SNAPSHOT_NOT_FOUND");Map<String,Object>am=castMap(aa.get("data")),bm=castMap(bb.get("data"));Set<String>keys=new LinkedHashSet<>(am.keySet());keys.addAll(bm.keySet());Map<String,Object>out=new LinkedHashMap<>();for(String k:keys)if(!Objects.equals(am.get(k),bm.get(k)))out.put(k,Arrays.asList(am.get(k),bm.get(k)));return out;}
+    }
+
+    static class WaldorfOverlay {
+        final String NAME="Waldorf the Game Masters Servant", ALIAS="D20CAD-ID", VER="1.2";
+        String BOOT="UNLOCKED"; final String SYS_CRC="SYS002"; int AUTO_DEBUG=0,DEBUG_MODE=0,MONITOR_HALT=0;
+        final Map<String,Object> goldfishBrain=new LinkedHashMap<>(); final Map<String,Map<String,Object>> retention=new LinkedHashMap<>();
+        final Map<String,Map<String,Object>> dirs; final List<String> LAST_5_CT_COMMANDS=new ArrayList<>(); final CCB ccb=new CCB();
+        final CommonsTable table=new CommonsTable("WALDORF-TABLE","Waldorf");
+
+        WaldorfOverlay(){
+            goldfishBrain.put("readall",null);goldfishBrain.put("crc_checks",new ArrayList<>());goldfishBrain.put("debug_logs",new ArrayList<>());goldfishBrain.put("system_logs",new ArrayList<>());goldfishBrain.put("last_error",null);goldfishBrain.put("monitors",new ArrayList<>());goldfishBrain.put("gm_context",null);goldfishBrain.put("retention_log",new ArrayList<>());goldfishBrain.put("deep_save_log",new ArrayList<>());
+            retention.put("D0",mapOf("HISTORY",5,"L1",10,"L2",20,"L3",30,"L4",40,"L5",999999));
+            retention.put("D1",mapOf("HISTORY",20,"CLEAR","PROTECT"));retention.put("D2",mapOf("HISTORY",20,"CLEAR","PROTECT"));retention.put("D3",mapOf("HISTORY",20,"CLEAR","PROTECT"));retention.put("D4",mapOf("HISTORY",20,"CLEAR","PROTECT"));retention.put("D5",mapOf("HISTORY",20,"TIMELINE",50,"CLEAR","PROTECT"));retention.put("D6",mapOf("HISTORY",20,"SESSION","PURGE","CLEAR","PROTECT"));
+            dirs=defaultDirs(); for(String d:dirs.keySet())dirs.get(d).put("CRC",crc(dirs.get(d).get("DATA"),5));
+            table.auth.grant(table.tableId,"SYSTEM","WRITE");table.auth.grant(table.tableId,"SYSTEM","ROLLBACK");syncTableState();
+        }
+
+        Map<String,Map<String,Object>> defaultDirs(){
+            Map<String,Map<String,Object>>m=new LinkedHashMap<>();
+            m.put("D0",mapOf("VIEW",0,"EDIT",0,"CRC",null,"NAME","deep_save","VER",1,"DATA",mapOf("L1",new LinkedHashMap<>(),"L2",new LinkedHashMap<>(),"L3",new LinkedHashMap<>(),"L4",new LinkedHashMap<>(),"L5",new LinkedHashMap<>(),"meta",mapOf("last_snapshot",0,"cascade_count",0)),"SCHEMA","deep","HISTORY",new ArrayList<>()));
+            m.put("D1",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","chars","VER",1,"DATA",mapOf("schema","pc","entries",mapOf("[SAVE]template",mapOf("name","","class","","level",1,"stats",mapOf("str",10,"dex",10,"con",10,"int",10,"wis",10,"cha",10),"hp",mapOf("current",10,"max",10),"ac",10,"inventory",new ArrayList<>(),"skills",new LinkedHashMap<>(),"conditions",new ArrayList<>()))),"SCHEMA","character","HISTORY",new ArrayList<>()));
+            m.put("D2",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","world","VER",1,"DATA",mapOf("[SAVE]system","d20_srd5.1","campaign","New Campaign","time",mapOf("day",1,"hour",8,"season","Spring"),"weather","Clear","locations",mapOf("tavern",mapOf("name","The Drunken Dragon","npcs",new ArrayList<>(),"notes","Starting location")),"factions",new LinkedHashMap<>(),"house_rules",new ArrayList<>(),"ability_scores",Arrays.asList("str","dex","con","int","wis","cha")),"SCHEMA","world","HISTORY",new ArrayList<>()));
+            m.put("D3",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","npcs","VER",1,"DATA",mapOf("schema","npc","entries",mapOf("[SAVE]bartender",mapOf("name","Grek Ironjaw","role","Bartender","disposition","friendly","location","tavern","secrets",Arrays.asList("Owes money to thieves guild"),"stats",mapOf("hp",15,"ac",11),"notes","Knows local rumors"))),"SCHEMA","npc","HISTORY",new ArrayList<>()));
+            m.put("D4",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","items","VER",1,"DATA",mapOf("schema","item","entries",mapOf("[SAVE]healing_potion",mapOf("name","Potion of Healing","type","consumable","rarity","common","effect","2d4+2 healing","value","50gp","attunement",false))),"SCHEMA","item","HISTORY",new ArrayList<>()));
+            m.put("D5",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","events","VER",1,"DATA",mapOf("schema","event","timeline",new ArrayList<>(),"active_quests",mapOf("[SAVE]q1",mapOf("title","Rat Problem","giver","bartender","objective","Clear rats from cellar","reward","20gp + free room","status","active")),"triggers",new LinkedHashMap<>()),"SCHEMA","event","HISTORY",new ArrayList<>()));
+            m.put("D6",mapOf("VIEW",1,"EDIT",1,"CRC",null,"NAME","notes","VER",1,"DATA",mapOf("markers",new LinkedHashMap<>(),"session_points",new ArrayList<>()),"SCHEMA","note","HISTORY",new ArrayList<>()));
+            return m;
+        }
+        void log(String e){((List<Object>)goldfishBrain.get("system_logs")).add(now()+"|"+e);}
+        boolean saveKey(Object k){return String.valueOf(k).startsWith("[SAVE]");}
+        Object extractSave(Object x){
+            if(x instanceof Map){Map<String,Object>r=new LinkedHashMap<>();for(Map.Entry<?,?>e:((Map<?,?>)x).entrySet()){String k=String.valueOf(e.getKey());Object v=e.getValue();if(saveKey(k))r.put(k,deepCopy(v));else if(v instanceof Map||v instanceof List){Object q=extractSave(v);if(q!=null)r.put(k,q);}}return r.isEmpty()?null:r;}
+            if(x instanceof List){List<Object>r=new ArrayList<>();for(Object i:(List<?>)x){Object q=extractSave(i);if(q!=null)r.add(q);}return r.isEmpty()?null:r;}return null;
+        }
+        void update(String d){Map<String,Object>x=dirs.get(d);List<Object>h=(List<Object>)x.get("HISTORY");h.add(mapOf("VER",x.get("VER"),"DATA",deepCopy(x.get("DATA")),"CRC",x.get("CRC")));x.put("VER",((Number)x.get("VER")).intValue()+1);x.put("CRC",crc(x.get("DATA"),5));prune(d);syncTableState();}
+        void prune(String d){Map<String,Object>x=dirs.get(d);List<Object>h=(List<Object>)x.get("HISTORY");int m=((Number)retention.get(d).get("HISTORY")).intValue();if(h.size()>m){List<Object>protectedH=new ArrayList<>(),other=new ArrayList<>();for(Object o:h){if(extractSave(((Map<String,Object>)o).get("DATA"))!=null)protectedH.add(o);else other.add(o);}int keep=Math.max(0,m-protectedH.size());List<Object>out=new ArrayList<>(protectedH);if(other.size()>keep)other=other.subList(other.size()-keep,other.size());out.addAll(other);x.put("HISTORY",out);}}
+        void cascade(){Map<String,Object>d=castMap(dirs.get("D0").get("DATA"));for(int i=1;i<=4;i++){String a="L"+i,b="L"+(i+1);int limit=((Number)retention.get("D0").get(a)).intValue();Map<String,Object>src=castMap(d.get(a));if(src.size()>limit){List<String>keys=new ArrayList<>(src.keySet());keys.sort(Comparator.comparingLong(k->{Object v=src.get(k);if(v instanceof Map&&((Map<?,?>)v).get("_timestamp") instanceof Number)return ((Number)((Map<?,?>)v).get("_timestamp")).longValue();return 0;}));int n=src.size()-limit;Map<String,Object>dst=castMap(d.get(b));for(String k:keys){if(n<=0)break;if(!saveKey(k)){dst.put(k,src.remove(k));n--;}}}}castMap(d.get("meta")).put("cascade_count",((Number)castMap(d.get("meta")).get("cascade_count")).intValue()+1);dirs.get("D0").put("CRC",crc(d,5));}
+        String deepSnapshot(){Map<String,Object>snap=mapOf("_timestamp",now());for(String k:Arrays.asList("D1","D2","D3","D4","D5","D6")){Object x=extractSave(dirs.get(k).get("DATA"));if(x!=null)snap.put(k,x);}String key="snapshot_"+now();Map<String,Object>d=castMap(dirs.get("D0").get("DATA"));castMap(d.get("L1")).put(key,snap);castMap(d.get("meta")).put("last_snapshot",now());cascade();((List<Object>)goldfishBrain.get("deep_save_log")).add(key);log("DEEP|SNAPSHOT|"+key);return key;}
+        void syncTableState(){Map<String,Object>ds=new LinkedHashMap<>();for(String k:dirs.keySet()){Map<String,Object>v=dirs.get(k);ds.put(k,mapOf("VER",v.get("VER"),"CRC",v.get("CRC"),"DATA",deepCopy(v.get("DATA"))));}table.state=mapOf("directories",ds);}
+        String read(String d){Map<String,Object>x=dirs.get(d);if(((Number)x.get("VIEW")).intValue()==0)return "ERROR|VIEW_DENIED|"+d;return "READ|OK|"+d+"|DATA="+Json.stringify(x.get("DATA"),false);}
+        String ct(String s){
+            if(MONITOR_HALT!=0)return "D20CAD-ID<ERROR|HALT|BOOT=LOCKED>";
+            if(s==null||!s.startsWith("CT>")){goldfishBrain.put("last_error","SYNTAX");return "D20CAD-ID<ERROR|SYNTAX|M5>";}
+            LAST_5_CT_COMMANDS.add(s);while(LAST_5_CT_COMMANDS.size()>5)LAST_5_CT_COMMANDS.remove(0);String[]p=s.substring(3).split("\\|",-1);String cmd=p[0].toUpperCase(Locale.ROOT);
+            try{
+                if(cmd.equals("READ")&&p.length==2)return "D20CAD-ID<"+read(p[1])+">";
+                if(cmd.equals("READALL")&&p.length==1){Map<String,Object>o=new LinkedHashMap<>();for(String k:dirs.keySet()){Map<String,Object>v=dirs.get(k);if(((Number)v.get("VIEW")).intValue()!=0)o.put(k,mapOf("NAME",v.get("NAME"),"VER",v.get("VER"),"CRC",v.get("CRC")));}return "D20CAD-ID<READALL|OK|DATA="+Json.stringify(o,false)+">";}
+                if(cmd.equals("WRITE")&&p.length>=3){String d=p[1];if(!dirs.containsKey(d))return "D20CAD-ID<ERROR|WRITE|INVALID_DIR>";if(((Number)dirs.get(d).get("EDIT")).intValue()==0)return "D20CAD-ID<ERROR|EDIT_DENIED|"+d+">";dirs.get(d).put("DATA",mapOf("raw",String.join("|",Arrays.copyOfRange(p,2,p.length))));update(d);return "D20CAD-ID<WRITE|OK|"+d+"|CRC="+dirs.get(d).get("CRC")+">";}
+                if(cmd.equals("APPEND")&&p.length>=3){String d=p[1];if(!dirs.containsKey(d))return "D20CAD-ID<ERROR|APPEND|INVALID_DIR>";if(((Number)dirs.get(d).get("EDIT")).intValue()==0)return "D20CAD-ID<ERROR|EDIT_DENIED|"+d+">";Map<String,Object>data=castMap(dirs.get(d).get("DATA"));List<Object>entries=(List<Object>)data.computeIfAbsent("entries",k->new ArrayList<>());String value=String.join("|",Arrays.copyOfRange(p,2,p.length));entries.add(value);if(stableJson(data).getBytes(StandardCharsets.UTF_8).length>MAX_DIRECTORY_BYTES){entries.remove(entries.size()-1);return "D20CAD-ID<ERROR|OVERFLOW|"+d+">";}update(d);return "D20CAD-ID<APPEND|OK|"+d+"|CRC="+dirs.get(d).get("CRC")+">";}
+                if(cmd.equals("CLEAR")&&p.length==2){String d=p[1];if(!dirs.containsKey(d))return "D20CAD-ID<ERROR|NOT_FOUND>";if(((Number)dirs.get(d).get("EDIT")).intValue()==0)return "D20CAD-ID<ERROR|EDIT_DENIED|"+d+">";dirs.get(d).put("DATA",new LinkedHashMap<>());update(d);return "D20CAD-ID<CLEAR|OK|"+d+"|CRC="+dirs.get(d).get("CRC")+">";}
+                if((cmd.equals("LOCK")||cmd.equals("UNLOCK"))&&p.length==2){String d=p[1];if(!dirs.containsKey(d))return "D20CAD-ID<ERROR|NOT_FOUND>";dirs.get(d).put("VIEW",cmd.equals("UNLOCK")?1:0);if(cmd.equals("LOCK"))dirs.get(d).put("EDIT",0);return "D20CAD-ID<PERM|OK|"+d+"_"+cmd+"ED>";}
+                if(cmd.equals("GRANT")&&p.length==2){dirs.get(p[1]).put("EDIT",1);return "D20CAD-ID<PERM|OK|"+p[1]+"_EDIT=1>";}
+                if(cmd.equals("REVOKE")&&p.length==2){dirs.get(p[1]).put("EDIT",0);return "D20CAD-ID<PERM|OK|"+p[1]+"_EDIT=0>";}
+                if(cmd.equals("LOCKALL")&&p.length==1){for(String d:dirs.keySet()){dirs.get(d).put("VIEW",0);dirs.get(d).put("EDIT",0);}BOOT="LOCKED";MONITOR_HALT=1;return "D20CAD-ID<PERM|OK|ALL_LOCKED>";}
+                if(cmd.equals("RECALL")&&p.length==2){String d=p[1];List<Object>h=(List<Object>)dirs.get(d).get("HISTORY");Object data=h.isEmpty()?dirs.get(d).get("DATA"):((Map<String,Object>)h.get(h.size()-1)).get("DATA");return "D20CAD-ID<RECALL|OK|DATA="+Json.stringify(data,false)+">";}
+                if(cmd.equals("RECALL_VER")&&p.length==3){String d=p[1],v=p[2];for(Object o:(List<Object>)dirs.get(d).get("HISTORY"))if(String.valueOf(((Map<String,Object>)o).get("VER")).equals(v))return "D20CAD-ID<RECALL_VER|OK|DATA="+Json.stringify(((Map<String,Object>)o).get("DATA"),false)+">";if(v.equals("0"))return "D20CAD-ID<RECALL_VER|OK|BLANK>";return "D20CAD-ID<RECALL_VER|VERSION_NOT_FOUND>";}
+                if(cmd.equals("DIFF")&&p.length==4)return diff(p[1],p[2],p[3]);
+                if(cmd.equals("CRC_CHECK")&&p.length==2&&p[1].equalsIgnoreCase("ALL")){List<String>bad=new ArrayList<>();for(String d:dirs.keySet())if(!String.valueOf(dirs.get(d).get("CRC")).equals(crc(dirs.get(d).get("DATA"),5)))bad.add(d);if(!bad.isEmpty()){MONITOR_HALT=1;BOOT="LOCKED";return "D20CAD-ID<CRC_CHECK|FAIL|"+Json.stringify(bad,false)+">";}return "D20CAD-ID<CRC_CHECK|PASS>";}
+                if(cmd.equals("DEEP")&&p.length>=2&&p[1].equalsIgnoreCase("SAVE"))return "D20CAD-ID<DEEP|SAVE|OK|"+deepSnapshot()+">";
+                if(cmd.equals("STATUS")&&p.length==1)return "D20CAD-ID<STATUS|OK|BOOT="+BOOT+"|HALT="+MONITOR_HALT+"|DEEP="+((List<?>)goldfishBrain.get("deep_save_log")).size()+">";
+                return "D20CAD-ID<ERROR|SYNTAX|UNKNOWN_COMMAND>";
+            }catch(Exception e){goldfishBrain.put("last_error",e.toString());log("EXCEPTION|"+s+"|"+e);return "D20CAD-ID<ERROR|INTERNAL>";}
+        }
+        String diff(String d,String a,String b){Map<String,Object>va=new LinkedHashMap<>(),vb=new LinkedHashMap<>();for(Object o:(List<Object>)dirs.get(d).get("HISTORY")){Map<String,Object>h=(Map<String,Object>)o;if(String.valueOf(h.get("VER")).equals(a))va=castMap(h.get("DATA"));if(String.valueOf(h.get("VER")).equals(b))vb=castMap(h.get("DATA"));}if(String.valueOf(dirs.get(d).get("VER")).equals(b))vb=castMap(dirs.get(d).get("DATA"));Set<String>keys=new LinkedHashSet<>(va.keySet());keys.addAll(vb.keySet());Map<String,Object>delta=new LinkedHashMap<>();for(String k:keys)if(!Objects.equals(va.get(k),vb.get(k)))delta.put(k,Arrays.asList(va.get(k),vb.get(k)));return "D20CAD-ID<DIFF|OK|DATA="+Json.stringify(delta,false)+">";}
+    }
+
+    static class Waldorf {
+        final WaldorfOverlay overlay=new WaldorfOverlay(); final Participant identity=new Participant("waldorf-agent","AI");
+        final String sourceDiscipline="designated source files and current table state only";
+        String handle(String message){return overlay.ct(message);}
+        Map<String,Object> rollback(String target,String reason,String expected,boolean systemPriority){return overlay.table.rollback("SYSTEM",target,systemPriority,true,reason,expected);}
+    }
+
+    static Map<String,Object> mapOf(Object... kv){Map<String,Object>m=new LinkedHashMap<>();for(int i=0;i+1<kv.length;i+=2)m.put(String.valueOf(kv[i]),kv[i+1]);return m;}
+    @SuppressWarnings("unchecked") static Map<String,Object> castMap(Object x){return (Map<String,Object>)x;}
+
+    static Map<String,Object> selfTest(){
+        Waldorf w=new Waldorf();WaldorfOverlay o=w.overlay;
+        check(o.ct("CT>STATUS").contains("STATUS|OK"));check(o.ct("CT>READ|D1").contains("READ|OK|D1"));check(o.ct("CT>CRC_CHECK|ALL").contains("CRC_CHECK|PASS"));
+        String snap=o.deepSnapshot();check(snap!=null&&!snap.isEmpty());CommonsTable t=o.table;t.auth.grant(t.tableId,"TABLE_ADMIN","ROLLBACK");t.auth.grant(t.tableId,"TABLE_ADMIN","WRITE");
+        HistoryVersion v2=t.saveState("TABLE_ADMIN",mapOf("scene","A"),"table_state");HistoryVersion v3=t.saveState("TABLE_ADMIN",mapOf("scene","B"),"table_state");
+        Map<String,Object>r=t.rollback("TABLE_ADMIN",v2.versionId,false,true,"test",v3.versionId);check("ROLLBACK_SUCCESS".equals(r.get("status")));check(t.current().data.equals(v2.data));check(t.sequestered.containsKey(r.get("sequestered")));
+        Map<String,Object>denied=t.rollback("TABLE_ADMIN",v2.versionId,false,false,"test",null);check("ROLLBACK_ACCESS_DENIED".equals(denied.get("status")));
+        check(!t.auth.tableRoles.getOrDefault(t.tableId,Collections.emptyMap()).getOrDefault("TABLE_ADMIN",Collections.emptySet()).contains("NAME_ADMIN"));
+        return mapOf("status","PASS","deep_snapshot",snap,"rollback",r,"denied",denied);
+    }
+    static void check(boolean x){if(!x)throw new AssertionError("SELF_TEST_FAILED");}
+
+    public static void main(String[] args){
+        System.out.println(Json.stringify(selfTest(),true));
+        Scanner scanner=new Scanner(System.in);
+        System.out.println("Waldorf Commons v1.10 Java Interface Active");
+        System.out.println("Type CT>COMMAND|ARG1|ARG2 or EXIT");
+        Waldorf w=new Waldorf();
+        while(true){System.out.print("CT> ");if(!scanner.hasNextLine())break;String input=scanner.nextLine().trim();if(input.equalsIgnoreCase("EXIT")){System.out.println("D20CAD-ID<SYS|SHUTDOWN>");break;}if(!input.isEmpty())System.out.println(w.handle(input));}
+    }
+
+    /* Minimal dependency-free JSON serializer. */
+    static class Json {
+        static String stringify(Object x, boolean sortKeys){StringBuilder s=new StringBuilder();write(x,s,sortKeys);return s.toString();}
+        static void write(Object x,StringBuilder s,boolean sort){
+            if(x==null){s.append("null");return;}if(x instanceof String||x instanceof Character){s.append('"').append(escape(String.valueOf(x))).append('"');return;}if(x instanceof Boolean||x instanceof Number){s.append(String.valueOf(x));return;}
+            if(x instanceof Map){s.append('{');List<String>keys=new ArrayList<>();for(Object k:((Map<?,?>)x).keySet())keys.add(String.valueOf(k));if(sort)Collections.sort(keys);for(int i=0;i<keys.size();i++){if(i>0)s.append(',');String k=keys.get(i);s.append('"').append(escape(k)).append("\":");write(((Map<?,?>)x).get(k),s,sort);}s.append('}');return;}
+            if(x instanceof Iterable){s.append('[');int i=0;for(Object v:(Iterable<?>)x){if(i++>0)s.append(',');write(v,s,sort);}s.append(']');return;}s.append('"').append(escape(String.valueOf(x))).append('"');
+        }
+        static String escape(String x){return x.replace("\\","\\\\").replace("\"","\\\"").replace("\n","\\n").replace("\r","\\r").replace("\t","\\t");}
+    }
+}

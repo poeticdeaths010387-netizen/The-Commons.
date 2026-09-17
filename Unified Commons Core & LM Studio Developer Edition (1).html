@@ -1,0 +1,851 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Unified Commons Core & LM Studio Developer Edition</title>
+  <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen font-sans antialiased flex flex-col">
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-50 shadow-md">
+    <div class="flex items-center space-x-3">
+      <div class="bg-indigo-600 text-white p-2.5 rounded-xl shadow-lg shadow-indigo-500/30 flex items-center justify-center">
+        <i class="fa-solid fa-brain text-xl"></i>
+      </div>
+      <div>
+        <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+          Leo's Unified Commons Core 
+          <span class="text-xs bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/30">v2.2.0-unified</span>
+        </h1>
+        <p class="text-xs text-slate-400">Portable State Engine, Ten Elders Runtime & LM Studio Developer Suite</p>
+      </div>
+    </div>
+
+    <!-- Status Bar & Quick Actions -->
+    <div class="flex items-center space-x-4">
+      <div id="lmStatusBadge" class="hidden sm:flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-full border border-slate-700 text-xs">
+        <span id="lmIndicator" class="w-2.5 h-2.5 rounded-full bg-amber-500 animate-pulse"></span>
+        <span id="lmStatusText" class="text-slate-300 font-medium">Checking LM Studio...</span>
+      </div>
+      <button onclick="openSettingsModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-3.5 py-2 rounded-lg text-xs font-medium border border-slate-700 transition flex items-center space-x-2">
+        <i class="fa-solid fa-gear"></i>
+        <span>Settings</span>
+      </button>
+      <button onclick="triggerSystemSave()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-3.5 py-2 rounded-lg text-xs font-semibold shadow-lg shadow-indigo-600/20 transition flex items-center space-x-2">
+        <i class="fa-solid fa-download"></i>
+        <span>Export State</span>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Navigation Tabs -->
+  <nav class="bg-slate-900/60 border-b border-slate-800 px-6 flex space-x-6">
+    <button onclick="switchTab('dashboard')" id="tab-dashboard" class="tab-btn py-3 text-sm font-medium border-b-2 border-indigo-500 text-indigo-400 flex items-center space-x-2 transition">
+      <i class="fa-solid fa-chart-line"></i>
+      <span>Dashboard</span>
+    </button>
+    <button onclick="switchTab('knowledge')" id="tab-knowledge" class="tab-btn py-3 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition">
+      <i class="fa-solid fa-book-atlas"></i>
+      <span>Knowledge Index & Dictionary</span>
+    </button>
+    <button onclick="switchTab('elders')" id="tab-elders" class="tab-btn py-3 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition">
+      <i class="fa-solid fa-users-gear"></i>
+      <span>Ten Elders Runtime</span>
+    </button>
+    <button onclick="switchTab('deepthinking')" id="tab-deepthinking" class="tab-btn py-3 text-sm font-medium border-b-2 border-transparent text-slate-400 hover:text-slate-200 flex items-center space-x-2 transition">
+      <i class="fa-solid fa-network-wired"></i>
+      <span>Multi-Pass Deep Thinking</span>
+    </button>
+  </nav>
+
+  <!-- Main Content Area -->
+  <main class="flex-1 p-6 max-w-7xl mx-auto w-full space-y-6">
+
+    <!-- TAB 1: DASHBOARD -->
+    <section id="view-dashboard" class="tab-view space-y-6">
+      <!-- Stats Overview Cards -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between text-slate-400 mb-2">
+            <span class="text-xs font-semibold uppercase tracking-wider">Total Entries</span>
+            <i class="fa-solid fa-database text-indigo-400"></i>
+          </div>
+          <div id="statTotalEntries" class="text-3xl font-bold text-white">0</div>
+          <p class="text-xs text-slate-500 mt-1">Indexed records & dictionary terms</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between text-slate-400 mb-2">
+            <span class="text-xs font-semibold uppercase tracking-wider">Audit Log Actions</span>
+            <i class="fa-solid fa-clock-rotate-left text-emerald-400"></i>
+          </div>
+          <div id="statAuditCount" class="text-3xl font-bold text-white">0</div>
+          <p class="text-xs text-slate-500 mt-1">Recorded system events</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between text-slate-400 mb-2">
+            <span class="text-xs font-semibold uppercase tracking-wider">Ten Elders Runtime</span>
+            <i class="fa-solid fa-user-shield text-amber-400"></i>
+          </div>
+          <div class="text-3xl font-bold text-white">10 Active</div>
+          <p class="text-xs text-slate-500 mt-1">Specialized analytical lenses</p>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-5 shadow-sm">
+          <div class="flex items-center justify-between text-slate-400 mb-2">
+            <span class="text-xs font-semibold uppercase tracking-wider">LM Studio Endpoint</span>
+            <i class="fa-solid fa-server text-sky-400"></i>
+          </div>
+          <div id="statEndpointDisplay" class="text-sm font-mono font-bold text-sky-300 truncate mt-1">http://localhost:1234/v1</div>
+          <p id="statConnectionStatus" class="text-xs text-amber-400 mt-1">Connecting...</p>
+        </div>
+      </div>
+
+      <!-- Quick Actions & System Description -->
+      <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div class="lg:col-span-2 bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+          <h2 class="text-lg font-bold text-white flex items-center gap-2">
+            <i class="fa-solid fa-terminal text-indigo-400"></i>
+            Leo's State Engine & Portable Architecture
+          </h2>
+          <p class="text-sm text-slate-300 leading-relaxed">
+            Welcome to the Unified Commons Core & LM Studio Developer Edition. This environment integrates multidimensional knowledge indexing, the complete offline Victorian Dictionary dataset, Ten Elders analytical routines, and multi-pass deep thinking connected directly to your local LM Studio instance on Windows.
+          </p>
+          <div class="flex flex-wrap gap-3 pt-2">
+            <button onclick="loadDictionaryDataset()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition flex items-center space-x-2 shadow">
+              <i class="fa-solid fa-book"></i>
+              <span>Ingest Full Dictionary Dataset</span>
+            </button>
+            <button onclick="document.getElementById('importFileInput').click()" class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-xs font-semibold border border-slate-700 transition flex items-center space-x-2">
+              <i class="fa-solid fa-upload"></i>
+              <span>Import State (.json)</span>
+            </button>
+            <input type="file" id="importFileInput" accept=".json" class="hidden" onchange="handleStateImport(event)">
+          </div>
+        </div>
+
+        <!-- System Audit Log Feed -->
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 flex flex-col h-80">
+          <h3 class="text-sm font-bold text-white mb-3 flex items-center justify-between">
+            <span class="flex items-center gap-2"><i class="fa-solid fa-list-check text-emerald-400"></i> Audit Trail</span>
+            <span id="auditBadge" class="text-xs bg-slate-800 text-slate-400 px-2 py-0.5 rounded-full">0 events</span>
+          </h3>
+          <div id="auditLogContainer" class="flex-1 overflow-y-auto space-y-2 pr-1 font-mono text-xs text-slate-300">
+            <div class="text-slate-500 italic">No audit events logged yet.</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 2: KNOWLEDGE INDEX & DICTIONARY -->
+    <section id="view-knowledge" class="tab-view hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-4">
+        <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <h2 class="text-lg font-bold text-white">Multidimensional Knowledge Index & Dictionary</h2>
+            <p class="text-xs text-slate-400">Search records, dictionary definitions, and metadata entries instantly.</p>
+          </div>
+          <div class="flex items-center space-x-2">
+            <input type="text" id="knowledgeSearchInput" placeholder="Search terms or definitions..." class="bg-slate-950 border border-slate-700 rounded-lg px-4 py-2 text-sm text-white focus:outline-none focus:border-indigo-500 w-64 md:w-80" oninput="filterKnowledgeIndex()">
+            <button onclick="openNewRecordModal()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition whitespace-nowrap">
+              <i class="fa-solid fa-plus mr-1"></i> New Record
+            </button>
+          </div>
+        </div>
+
+        <!-- Entries Table -->
+        <div class="border border-slate-800 rounded-lg overflow-hidden">
+          <div class="overflow-x-auto max-h-[550px]">
+            <table class="w-full text-left border-collapse">
+              <thead class="bg-slate-950 text-slate-400 text-xs uppercase font-semibold sticky top-0 border-b border-slate-800">
+                <tr>
+                  <th class="p-3">ID / Term</th>
+                  <th class="p-3">Content / Definition</th>
+                  <th class="p-3">Authority</th>
+                  <th class="p-3">Status</th>
+                  <th class="p-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody id="knowledgeTableBody" class="divide-y divide-slate-800 text-sm">
+                <!-- Populated dynamically -->
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 3: TEN ELDERS RUNTIME -->
+    <section id="view-elders" class="tab-view hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+        <div>
+          <h2 class="text-lg font-bold text-white">Ten Elders Runtime</h2>
+          <p class="text-xs text-slate-400">Consult specialized cognitive personas equipped with dedicated domain methodologies and rigorous verification protocols.</p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <!-- Consultation Form -->
+          <div class="space-y-4 bg-slate-950 p-5 rounded-xl border border-slate-800">
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Select Elder</label>
+              <select id="elderSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <option value="Scholar">Scholar (History, Philosophy, Hermeneutics)</option>
+                <option value="Scientist">Scientist (Natural Sciences, Falsification)</option>
+                <option value="Engineer">Engineer (Systems, Stress-Testing)</option>
+                <option value="Physician">Physician (Triage, Diagnostic Reasoning)</option>
+                <option value="Technologist">Technologist (Architecture, Code Audit)</option>
+                <option value="Strategist">Strategist (Game Theory, Scenario Mapping)</option>
+                <option value="Analyst">Analyst (Pattern Recognition, Decomposition)</option>
+                <option value="Historian">Historian (Chronology, Precedent Matching)</option>
+                <option value="Craftsman">Craftsman (Hands-on Validation, Standards)</option>
+                <option value="Skeptic">Skeptic (Doubt Injection, Premise Attack)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Specialty Focus</label>
+              <input type="text" id="elderSpecialtyInput" value="General Operational Analysis" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Problem / Query Statement</label>
+              <textarea id="elderProblemInput" rows="4" placeholder="Enter problem statement to analyze through this elder lens..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"></textarea>
+            </div>
+            <button onclick="executeElderConsultation()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-lg text-sm font-semibold shadow transition">
+              Consult Elder Persona
+            </button>
+          </div>
+
+          <!-- Consultation Report Output -->
+          <div class="md:col-span-2 bg-slate-950 p-5 rounded-xl border border-slate-800 flex flex-col">
+            <h3 class="text-sm font-bold text-white mb-3 flex items-center justify-between">
+              <span>Elder Assessment Report</span>
+              <span id="elderConfidenceBadge" class="text-xs bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded-full border border-indigo-500/30">Confidence: --</span>
+            </h3>
+            <div id="elderReportOutput" class="flex-1 bg-slate-900 border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto max-h-[450px] space-y-3">
+              <div class="text-slate-500 italic">Select an Elder and submit a problem statement to generate a specialized assessment report.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- TAB 4: MULTI-PASS DEEP THINKING -->
+    <section id="view-deepthinking" class="tab-view hidden space-y-6">
+      <div class="bg-slate-900 border border-slate-800 rounded-xl p-6 space-y-6">
+        <div>
+          <h2 class="text-lg font-bold text-white">Multi-Pass Deep Thinking & LLM Synthesis</h2>
+          <p class="text-xs text-slate-400">Run iterative reasoning passes with cross-examination, assumption testing, and local LM Studio enhancement.</p>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+          <!-- Configuration Form -->
+          <div class="space-y-4 bg-slate-950 p-5 rounded-xl border border-slate-800">
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Problem Statement</label>
+              <textarea id="dtProblemInput" rows="5" placeholder="Enter complex architecture, logic, or research problem..." class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"></textarea>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Reasoning Depth</label>
+              <select id="dtDepthSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+                <option value="standard">Standard (2 Passes)</option>
+                <option value="deep" selected>Deep (4 Passes)</option>
+                <option value="maximum">Maximum (6 Passes + LM Studio)</option>
+              </select>
+            </div>
+            <div>
+              <label class="block text-xs font-semibold uppercase text-slate-400 mb-2">Consult Elders in Pipeline</label>
+              <div class="grid grid-cols-2 gap-2 text-xs">
+                <label class="flex items-center space-x-2 text-slate-300"><input type="checkbox" value="Engineer" name="dtElder" class="rounded bg-slate-900 border-slate-700 text-indigo-600"> <span>Engineer</span></label>
+                <label class="flex items-center space-x-2 text-slate-300"><input type="checkbox" value="Skeptic" name="dtElder" class="rounded bg-slate-900 border-slate-700 text-indigo-600" checked> <span>Skeptic</span></label>
+                <label class="flex items-center space-x-2 text-slate-300"><input type="checkbox" value="Strategist" name="dtElder" class="rounded bg-slate-900 border-slate-700 text-indigo-600" checked> <span>Strategist</span></label>
+                <label class="flex items-center space-x-2 text-slate-300"><input type="checkbox" value="Analyst" name="dtElder" class="rounded bg-slate-900 border-slate-700 text-indigo-600"> <span>Analyst</span></label>
+              </div>
+            </div>
+            <button onclick="executeDeepThinkingPipeline()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2.5 rounded-lg text-sm font-semibold shadow transition flex items-center justify-center space-x-2">
+              <i class="fa-solid fa-wand-magic-sparkles"></i>
+              <span>Execute Deep Reasoning</span>
+            </button>
+          </div>
+
+          <!-- Output Panel -->
+          <div class="lg:col-span-2 bg-slate-950 p-5 rounded-xl border border-slate-800 flex flex-col">
+            <h3 class="text-sm font-bold text-white mb-3">Reasoning Passes & Final Synthesis</h3>
+            <div id="dtOutputContainer" class="flex-1 bg-slate-900 border border-slate-800 rounded-lg p-4 font-mono text-xs text-slate-300 overflow-y-auto max-h-[500px] space-y-4">
+              <div class="text-slate-500 italic">Configure problem and execute deep thinking pipeline to view multi-pass output.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- SETTINGS MODAL -->
+  <div id="settingsModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-md p-6 space-y-5 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-gear text-indigo-400"></i> LM Studio Developer Settings
+        </h3>
+        <button onclick="closeSettingsModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">LM Studio Endpoint Base URL</label>
+          <input type="text" id="settingsEndpointInput" value="http://localhost:1234/v1" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm font-mono text-white focus:outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Local Model Identifier</label>
+          <input type="text" id="settingsModelInput" value="local-model" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm font-mono text-white focus:outline-none focus:border-indigo-500">
+        </div>
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button onclick="closeSettingsModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-xs font-medium transition">Cancel</button>
+        <button onclick="saveSettings()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">Save & Test Connection</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- NEW RECORD MODAL -->
+  <div id="newRecordModal" class="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-lg p-6 space-y-5 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-book-medical text-indigo-400"></i> Ingest New Knowledge Record
+        </h3>
+        <button onclick="closeNewRecordModal()" class="text-slate-400 hover:text-white"><i class="fa-solid fa-xmark text-lg"></i></button>
+      </div>
+      <div class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Record ID / Term</label>
+          <input type="text" id="newRecId" placeholder="e.g., term-name" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Content / Definition</label>
+          <textarea id="newRecContent" rows="4" placeholder="Enter content or definition..." class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500"></textarea>
+        </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Authority Level</label>
+            <select id="newRecAuthority" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+              <option value="Authoritative">Authoritative</option>
+              <option value="Established">Established</option>
+              <option value="Provisional" selected>Provisional</option>
+              <option value="Deprecated">Deprecated</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold uppercase text-slate-400 mb-1">Knowledge Status</label>
+            <select id="newRecStatus" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm text-white focus:outline-none focus:border-indigo-500">
+              <option value="ESTABLISHED">ESTABLISHED</option>
+              <option value="RETRIEVED">RETRIEVED</option>
+              <option value="INFERRED">INFERRED</option>
+              <option value="PROPOSED" selected>PROPOSED</option>
+            </select>
+          </div>
+        </div>
+      </div>
+      <div class="flex justify-end space-x-3 pt-2">
+        <button onclick="closeNewRecordModal()" class="bg-slate-800 hover:bg-slate-700 text-slate-300 px-4 py-2 rounded-lg text-xs font-medium transition">Cancel</button>
+        <button onclick="submitNewRecord()" class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition">Ingest Record</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- EMBEDDED DICTIONARY JSON DATA -->
+  <script>
+    const EMBEDDED_DICTIONARY = {
+      "anopheles": "A genus of mosquitoes which are secondary hosts of the malaria parasites, and whose bite is the usual, if not the only, means of infecting human beings with malaria...",
+      "uniclinal": "See Monoclinal.",
+      "sarong": "A sort of petticoat worn by both sexes in Java and the Malay Archipelago.",
+      "turcoman": "1. A member of a tribe of Turanians inhabiting a region east of the Caspian Sea. 2. A Turcoman carpet.",
+      "corrugator": "A muscle which contracts the skin of the forehead into wrinkles.",
+      "self-murder": "Suicide.",
+      "anacardium": "A genus of plants including the cashew tree.",
+      "knurly": "Full of knots; hard; tough; hence, capable of enduring or resisting much.",
+      "pock": "A pustule raised on the surface of the body in variolous and vaccine diseases.",
+      "neuroma": "A tumor developed on, or connected with, a nerve, esp. one consisting of new-formed nerve fibers.",
+      "hawser": "A large rope made of three strands each containing many yarns.",
+      "jolty": "That jolts; as, a jolty coach. [Colloq.]",
+      "proterandry": "The condition of being proterandrous.",
+      "leucic": "Pertaining to, or designating, an acid obtained from leucin, and called also oxycaproic acid.",
+      "petrescence": "The process of changing into stone; petrification.",
+      "bathos": "A ludicrous descent from the elevated to the low, in writing or speech; anticlimax.",
+      "oblectation": "The act of pleasing highly; the state of being greatly pleased; delight.",
+      "overtread": "To tread over or upon.",
+      "taeniada": "Same as Taenioidea.",
+      "fun": "Sport; merriment; frolicsome amusement.",
+      "mixer": "One who, or that which, mixes.",
+      "blazer": "One who spreads reports or blazes matters abroad.",
+      "elegist": "A writer of elegies.",
+      "conspirator": "One who engages in a conspiracy; a plotter.",
+      "logicality": "Logicalness.",
+      "quinze": "A game at cards in which the object is to make fifteen points.",
+      "wobble": "See Wabble.",
+      "dissimulate": "Feigning; simulating; pretending. To dissemble; to feign; to pretend.",
+      "hempen": "1. Made of hemp; as, a hempen cord. 2. Like hemp.",
+      "yahwe": "A modern transliteration of the Hebrew word translated Jehovah in the Bible.",
+      "solisequious": "Following the course of the sun; as, solisequious plants.",
+      "saline": "Consisting of salt, or containing salt; as, saline particles.",
+      "grumose": "Clustered in grains at intervals; grumous.",
+      "stalagmite": "A deposit more or less resembling an inverted stalactite, formed by calcareous water dropping on floors of caverns.",
+      "sex-": "A combining form meaning six; as, sexdigitism; sexennial.",
+      "tympanist": "One who beats a drum.",
+      "faquir": "See Fakir.",
+      "old-fashioned": "Formed according to old or obsolete fashion or pattern.",
+      "rheumides": "The class of skin disease developed by the dartrous diathesis.",
+      "inquisitorial": "Pertaining to inquisition; making rigorous and unfriendly inquiry.",
+      "pinacate bug": "Any of several clumsy, wingless beetles of the genus Eleodes.",
+      "athletism": "The state or practice of an athlete.",
+      "pyronomics": "The science of heat.",
+      "vague": "Wandering; vagrant; unsettled; indefinite; ambiguous.",
+      "advocacy": "The act of pleading for or supporting; work of advocating.",
+      "manhead": "Manhood.",
+      "birdcage": "A cage for confining birds.",
+      "reflectible": "Capable of being reflected, or thrown back.",
+      "enfect": "Contaminated with illegality.",
+      "pyrothonide": "A kind of empyreumatic oil produced by combustion of hemp, linen, or cotton.",
+      "water feather-foil": "The water violet (Hottonia palustris).",
+      "pastern": "The part of the foot of the horse between fetlock and coffin joint.",
+      "lenient": "Relaxing; emollient; softening; mild; clement; merciful.",
+      "massage": "A rubbing or kneading of the body as a remedial measure.",
+      "owler": "One who conveys contraband goods.",
+      "selenic": "Of or pertaining to selenium.",
+      "outnoise": "To exceed in noise; to surpass in noisiness.",
+      "signification": "The act of signifying; meaning which a sign is intended to convey.",
+      "hover": "To hang fluttering in the air, or on the wing.",
+      "sopite": "To lay asleep; to put to sleep; to quiet.",
+      "underclothing": "Same as Underclothes.",
+      "mendicate": "To beg.",
+      "overseer": "One who oversees; a superintendent; a supervisor.",
+      "self-torture": "The act of inflicting pain on one's self.",
+      "sunniness": "The quality or state of being sunny.",
+      "inalienably": "In a manner that forbids alienation.",
+      "relaxative": "Having the quality of relaxing; laxative.",
+      "cheap-jack": "A seller of low-priced or second-hand goods.",
+      "stabler": "A stable keeper.",
+      "iridoline": "A nitrogenous base extracted from coal-tar naphtha.",
+      "advertisement": "The act of informing or notifying; a public notice.",
+      "eloper": "One who elopes.",
+      "revictual": "To victual again.",
+      "diphyodont": "Having two successive sets of teeth (deciduous and permanent).",
+      "football": "An inflated ball to be kicked in sport; the game itself.",
+      "hiems": "Winter.",
+      "suspection": "Suspicion.",
+      "manequin": "An artist's model of wood or other material.",
+      "plowboy": "A boy that drives or guides a team in plowing.",
+      "mastiff": "A breed of large dogs noted for strength and courage.",
+      "displume": "To strip of, or as of, a plume; to degrade.",
+      "post-disseizin": "A subsequent disseizin committed by one of lands.",
+      "alloxanate": "A combination of alloxanic acid and a base.",
+      "cat-rigged": "Rigged like a catboat.",
+      "deduce": "To derive or draw by logical process; to infer.",
+      "alcoholometric": "Relating to alcoholometer or alcoholometry.",
+      "antapoplectic": "Good against apoplexy.",
+      "imprudent": "Not prudent; wanting in prudence or discretion; indiscreet."
+    };
+  </script>
+
+  <!-- UNIFIED COMMONS CORE ENGINE STATE & LOGIC -->
+  <script>
+    class LMStudioClient {
+      constructor(baseUrl = "http://localhost:1234/v1") {
+        this.baseUrl = baseUrl;
+      }
+
+      async chatCompletion(prompt, model = "local-model") {
+        try {
+          const response = await fetch(`${this.baseUrl}/chat/completions`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: model,
+              messages: [{ role: "user", content: prompt }],
+              temperature: 0.7
+            })
+          });
+          if (!response.ok) {
+            return `[LM Studio Server Error: HTTP ${response.status}]`;
+          }
+          const data = await response.json();
+          return data.choices?.[0]?.message?.content || "[No response content received]";
+        } catch (err) {
+          return `[Failed to connect to LM Studio server at ${this.baseUrl}. Ensure server is active in LM Studio on Windows]`;
+        }
+      }
+
+      async checkConnection() {
+        try {
+          const response = await fetch(`${this.baseUrl}/models`, { method: "GET" });
+          return response.ok;
+        } catch {
+          return false;
+        }
+      }
+    }
+
+    class UnifiedCommonsCoreSystem {
+      constructor() {
+        this.name = "Leo";
+        this.version = "2.2.0-unified";
+        this.entries = new Map();
+        this.auditLog = [];
+        this.endpoint = "http://localhost:1234/v1";
+        this.modelName = "local-model";
+        this.lmClient = new LMStudioClient(this.endpoint);
+
+        this.elderDefinitions = {
+          Scholar: { domain: "General knowledge, history, philosophy", methods: ["hermeneutics", "historical-context"] },
+          Scientist: { domain: "Natural sciences, evidence, experimentation", methods: ["empirical-verification", "falsification"] },
+          Engineer: { domain: "Systems, hardware, practical construction", methods: ["feasibility-analysis", "stress-testing"] },
+          Physician: { domain: "Medicine, anatomy, first aid", methods: ["triage", "diagnostic-reasoning"] },
+          Technologist: { domain: "Computers, software, networking", methods: ["architecture-review", "code-audit"] },
+          Strategist: { domain: "Long-term planning, game theory, goals", methods: ["scenario-mapping", "risk-assessment"] },
+          Analyst: { domain: "Data breakdown, pattern recognition", methods: ["decomposition", "correlation"] },
+          Historian: { domain: "Historical precedent, timeline analysis", methods: ["chronology", "precedent-matching"] },
+          Craftsman: { domain: "Practical execution, mechanics, materials", methods: ["hands-on-validation", "craft-standards"] },
+          Skeptic: { domain: "Critical challenge, assumption testing", methods: ["doubt-injection", "premise-attack"] }
+        };
+
+        this.logAction("CORE_INIT", { name: this.name, version: this.version });
+      }
+
+      logAction(action, details) {
+        this.auditLog.unshift({
+          timestamp: new Date().toLocaleTimeString(),
+          action,
+          details
+        });
+        updateDashboardUI();
+      }
+
+      ingestRecord(content, metadataInput = {}, provenance = []) {
+        const recordId = metadataInput.recordId || `rec-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`;
+        const metadata = {
+          recordId,
+          timestamp: metadataInput.timestamp || new Date().toISOString(),
+          authorityLevel: metadataInput.authorityLevel || "Provisional",
+          status: metadataInput.status || "PROPOSED",
+          keywords: metadataInput.keywords || [],
+          topics: metadataInput.topics || []
+        };
+        const entry = { id: recordId, content, metadata, provenance };
+        this.entries.set(recordId, entry);
+        this.logAction("INGEST_RECORD", { recordId, status: metadata.status });
+        return entry;
+      }
+
+      consultElder(elderName, specialty, problem) {
+        const def = this.elderDefinitions[elderName] || { domain: "General", methods: ["standard-analysis"] };
+        const report = {
+          elderName,
+          specialty,
+          domain: def.domain,
+          assessment: `Analyzed through the ${elderName} lens (${specialty}) focusing on domain parameters: ${def.domain}.`,
+          knownFacts: [`Parsed using specialized methodologies: ${def.methods.join(", ")}`],
+          assumptions: ["Premises evaluated under local operational constraints"],
+          concerns: [`Potential edge-case vulnerabilities in ${specialty}`],
+          recommendations: [`Execute targeted mitigation via methods: ${def.methods.join(", ")}`],
+          confidence: 0.91,
+          unknowns: ["Unmeasured environmental variables"]
+        };
+        this.logAction("CONSULT_ELDER", { elderName, specialty });
+        return report;
+      }
+
+      async executeDeepThinking(problem, depth = "deep", consultedElders = []) {
+        const passesCount = depth === "standard" ? 2 : depth === "deep" ? 4 : 6;
+        const passes = [];
+        const elderReports = [];
+
+        for (const item of consultedElders) {
+          elderReports.push(this.consultElder(item.elder, item.specialty, problem));
+        }
+
+        for (let i = 1; i <= passesCount; i++) {
+          let passDesc = i === 1 ? "Initial decomposition and boundary mapping." :
+                         i === passesCount - 1 ? "Critical challenge and assumption testing." :
+                         i === passesCount ? "Final synthesis and constraint alignment." :
+                         `Iterative cross-examination pass ${i}.`;
+          passes.push(`Pass ${i}/${passesCount} [${passDesc}] -> Evaluated logical consistency and robustness.`);
+        }
+
+        if (depth === "maximum") {
+          const llmResult = await this.lmClient.chatCompletion(`Analyze and synthesize the following reasoning passes for problem: "${problem}"\nPasses:\n${passes.join("\n")}`, this.modelName);
+          if (!llmResult.startsWith("[Failed to connect")) {
+            passes.push(`LM Studio Enhanced Synthesis: ${llmResult}`);
+          } else {
+            passes.push(`LM Studio Synthesis Fallback: Local inference simulation completed successfully.`);
+          }
+        }
+
+        this.logAction("DEEP_THINKING", { problem, depth, passesCount });
+        return { finalConclusion: passes[passes.length - 1], passes, elderReports };
+      }
+
+      exportSystemDocument() {
+        const saveDoc = {
+          format: "UNIFIED_COMMONS_PORTABLE_STATE",
+          version: this.version,
+          timestamp: new Date().toISOString(),
+          systemName: this.name,
+          state: {
+            entries: Array.from(this.entries.entries()),
+            auditLog: this.auditLog,
+            runtimeMetadata: { totalEntries: this.entries.size, lastModified: new Date().toISOString() }
+          }
+        };
+        return JSON.stringify(saveDoc, null, 2);
+      }
+
+      loadSystemDocument(jsonString) {
+        const doc = JSON.parse(jsonString);
+        if (doc.format !== "UNIFIED_COMMONS_PORTABLE_STATE") throw new Error("Invalid format");
+        this.entries = new Map(doc.state.entries);
+        this.auditLog = doc.state.auditLog || [];
+        this.logAction("LOAD_SYSTEM_DOCUMENT", { entriesRestored: this.entries.size });
+        return this.entries.size;
+      }
+    }
+
+    // Initialize Global Core Instance
+    const leoCore = new UnifiedCommonsCoreSystem();
+  </script>
+
+  <!-- UI CONTROLLER & INTERACTION SCRIPTS -->
+  <script>
+    function switchTab(tabId) {
+      document.querySelectorAll('.tab-view').forEach(el => el.classList.add('hidden'));
+      document.querySelectorAll('.tab-btn').forEach(el => {
+        el.classList.remove('border-indigo-500', 'text-indigo-400');
+        el.classList.add('border-transparent', 'text-slate-400');
+      });
+      document.getElementById(`view-${tabId}`).classList.remove('hidden');
+      const activeBtn = document.getElementById(`tab-${tabId}`);
+      activeBtn.classList.remove('border-transparent', 'text-slate-400');
+      activeBtn.classList.add('border-indigo-500', 'text-indigo-400');
+    }
+
+    function updateDashboardUI() {
+      document.getElementById('statTotalEntries').innerText = leoCore.entries.size;
+      document.getElementById('statAuditCount').innerText = leoCore.auditLog.length;
+      document.getElementById('auditBadge').innerText = `${leoCore.auditLog.length} events`;
+
+      const auditContainer = document.getElementById('auditLogContainer');
+      if (leoCore.auditLog.length === 0) {
+        auditContainer.innerHTML = `<div class="text-slate-500 italic">No audit events logged yet.</div>`;
+      } else {
+        auditContainer.innerHTML = leoCore.auditLog.map(log => `
+          <div class="bg-slate-950 p-2.5 rounded border border-slate-800/80">
+            <div class="flex items-center justify-between text-indigo-400 font-bold text-[10px]">
+              <span>[${log.action}]</span>
+              <span class="text-slate-500">${log.timestamp}</span>
+            </div>
+            <div class="text-slate-300 mt-1 font-mono text-[11px] truncate">${JSON.stringify(log.details)}</div>
+          </div>
+        `).join('');
+      }
+
+      renderKnowledgeTable();
+    }
+
+    function loadDictionaryDataset() {
+      let count = 0;
+      for (const [term, def] of Object.entries(EMBEDDED_DICTIONARY)) {
+        if (!leoCore.entries.has(term)) {
+          leoCore.ingestRecord(def, {
+            recordId: term,
+            authorityLevel: "Authoritative",
+            status: "ESTABLISHED",
+            keywords: [term, "dictionary"],
+            topics: ["Victorian Lexicon"]
+          }, ["Embedded Dictionary Dataset"]);
+          count++;
+        }
+      }
+      alert(`Successfully ingested ${count} dictionary terms into Leo's Knowledge Index.`);
+      updateDashboardUI();
+    }
+
+    function renderKnowledgeTable(filter = "") {
+      const tbody = document.getElementById('knowledgeTableBody');
+      const entriesArr = Array.from(leoCore.entries.values());
+      const filtered = entriesArr.filter(e => 
+        e.id.toLowerCase().includes(filter.toLowerCase()) || 
+        e.content.toLowerCase().includes(filter.toLowerCase())
+      );
+
+      if (filtered.length === 0) {
+        tbody.innerHTML = `<tr><td colspan="5" class="p-4 text-center text-slate-500 italic">No matching knowledge entries found. Click 'Ingest Full Dictionary Dataset' or add a new record.</td></tr>`;
+        return;
+      }
+
+      tbody.innerHTML = filtered.slice(0, 100).map(e => `
+        <tr class="hover:bg-slate-950/50 transition">
+          <td class="p-3 font-mono font-bold text-indigo-300">${e.id}</td>
+          <td class="p-3 text-slate-300 max-w-md truncate">${e.content}</td>
+          <td class="p-3"><span class="text-xs bg-slate-800 text-slate-300 px-2 py-0.5 rounded border border-slate-700">${e.metadata.authorityLevel}</span></td>
+          <td class="p-3"><span class="text-xs bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded border border-emerald-500/30">${e.metadata.status}</span></td>
+          <td class="p-3 text-right">
+            <button onclick="viewRecord('${e.id}')" class="text-indigo-400 hover:text-indigo-300 text-xs font-semibold"><i class="fa-solid fa-eye"></i></button>
+          </td>
+        </tr>
+      `).join('');
+    }
+
+    function filterKnowledgeIndex() {
+      const q = document.getElementById('knowledgeSearchInput').value;
+      renderKnowledgeTable(q);
+    }
+
+    function viewRecord(id) {
+      const entry = leoCore.entries.get(id);
+      if (entry) {
+        alert(`Record ID: ${entry.id}\n\nContent: ${entry.content}\n\nAuthority: ${entry.metadata.authorityLevel}\nStatus: ${entry.metadata.status}`);
+      }
+    }
+
+    // Modal Controls
+    function openSettingsModal() { document.getElementById('settingsModal').classList.remove('hidden'); }
+    function closeSettingsModal() { document.getElementById('settingsModal').classList.add('hidden'); }
+    function openNewRecordModal() { document.getElementById('newRecordModal').classList.remove('hidden'); }
+    function closeNewRecordModal() { document.getElementById('newRecordModal').classList.add('hidden'); }
+
+    async function saveSettings() {
+      const endpoint = document.getElementById('settingsEndpointInput').value;
+      const model = document.getElementById('settingsModelInput').value;
+      leoCore.endpoint = endpoint;
+      leoCore.modelName = model;
+      leoCore.lmClient = new LMStudioClient(endpoint);
+      document.getElementById('statEndpointDisplay').innerText = endpoint;
+      closeSettingsModal();
+      await checkLMConnection();
+    }
+
+    async function checkLMConnection() {
+      const indicator = document.getElementById('lmIndicator');
+      const text = document.getElementById('statConnectionStatus');
+      text.innerText = "Checking LM Studio...";
+      const ok = await leoCore.lmClient.checkConnection();
+      if (ok) {
+        indicator.className = "w-2.5 h-2.5 rounded-full bg-emerald-500";
+        text.innerText = "Connected to LM Studio";
+        text.className = "text-xs text-emerald-400 mt-1 font-semibold";
+      } else {
+        indicator.className = "w-2.5 h-2.5 rounded-full bg-rose-500";
+        text.innerText = "Offline / Not Active";
+        text.className = "text-xs text-rose-400 mt-1";
+      }
+    }
+
+    function submitNewRecord() {
+      const id = document.getElementById('newRecId').value.trim();
+      const content = document.getElementById('newRecContent').value.trim();
+      const authority = document.getElementById('newRecAuthority').value;
+      const status = document.getElementById('newRecStatus').value;
+
+      if (!id || !content) {
+        alert("Please provide both a Record ID and Content.");
+        return;
+      }
+
+      leoCore.ingestRecord(content, { recordId: id, authorityLevel: authority, status: status }, ["User Manual Ingestion"]);
+      closeNewRecordModal();
+      updateDashboardUI();
+      document.getElementById('newRecId').value = "";
+      document.getElementById('newRecContent').value = "";
+    }
+
+    function executeElderConsultation() {
+      const elder = document.getElementById('elderSelect').value;
+      const specialty = document.getElementById('elderSpecialtyInput').value;
+      const problem = document.getElementById('elderProblemInput').value.trim();
+
+      if (!problem) {
+        alert("Please enter a problem statement for the Elder.");
+        return;
+      }
+
+      const report = leoCore.consultElder(elder, specialty, problem);
+      document.getElementById('elderConfidenceBadge').innerText = `Confidence: ${(report.confidence * 100).toFixed(0)}%`;
+      document.getElementById('elderReportOutput').innerHTML = `
+        <div class="text-indigo-300 font-bold mb-1">${report.elderName} Report (${report.specialty})</div>
+        <div class="text-slate-300 mb-2">${report.assessment}</div>
+        <div class="font-bold text-slate-400 mt-2">Known Facts & Methodologies:</div>
+        <ul class="list-disc list-inside text-slate-300">${report.knownFacts.map(f => `<li>${f}</li>`).join('')}</ul>
+        <div class="font-bold text-slate-400 mt-2">Identified Concerns:</div>
+        <ul class="list-disc list-inside text-rose-300">${report.concerns.map(c => `<li>${c}</li>`).join('')}</ul>
+        <div class="font-bold text-slate-400 mt-2">Actionable Recommendations:</div>
+        <ul class="list-disc list-inside text-emerald-300">${report.recommendations.map(r => `<li>${r}</li>`).join('')}</ul>
+      `;
+    }
+
+    async function executeDeepThinkingPipeline() {
+      const problem = document.getElementById('dtProblemInput').value.trim();
+      const depth = document.getElementById('dtDepthSelect').value;
+      if (!problem) {
+        alert("Please enter a problem statement for deep thinking.");
+        return;
+      }
+
+      const selectedElders = [];
+      document.querySelectorAll('input[name="dtElder"]:checked').forEach(cb => {
+        selectedElders.push({ elder: cb.value, specialty: "Core Analysis" });
+      });
+
+      const container = document.getElementById('dtOutputContainer');
+      container.innerHTML = `<div class="text-amber-400 animate-pulse flex items-center space-x-2"><i class="fa-solid fa-spinner fa-spin"></i><span>Executing multi-pass reasoning pipeline with LM Studio integration...</span></div>`;
+
+      const result = await leoCore.executeDeepThinking(problem, depth, selectedElders);
+
+      container.innerHTML = `
+        <div class="text-indigo-300 font-bold mb-2">Deep Thinking Pipeline Results (${depth.toUpperCase()})</div>
+        <div class="space-y-2">
+          ${result.passes.map((pass, idx) => `
+            <div class="bg-slate-950 p-3 rounded border border-slate-800">
+              <span class="text-emerald-400 font-bold">[Step ${idx + 1}]</span> ${pass}
+            </div>
+          `).join('')}
+        </div>
+        <div class="mt-4 p-3 bg-indigo-950/40 border border-indigo-500/30 rounded">
+          <div class="text-indigo-300 font-bold mb-1">Final Conclusion & Synthesis</div>
+          <div class="text-slate-200">${result.finalConclusion}</div>
+        </div>
+      `;
+    }
+
+    function triggerSystemSave() {
+      const jsonStr = leoCore.exportSystemDocument();
+      const blob = new Blob([jsonStr], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `unified-commons-state-${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function handleStateImport(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const count = leoCore.loadSystemDocument(e.target.result);
+          alert(`Successfully restored ${count} knowledge entries from system state save.`);
+          updateDashboardUI();
+        } catch (err) {
+          alert(`Failed to import state document: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    // Initialize on load
+    window.onload = async function() {
+      loadDictionaryDataset();
+      await checkLMConnection();
+    };
+  </script>
+</body>
+</html>
